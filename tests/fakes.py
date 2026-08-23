@@ -1,0 +1,1 @@
+# FakeLLMClient — scripted, deterministic
