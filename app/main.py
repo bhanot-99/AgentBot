@@ -18,6 +18,8 @@ from app.api import chat, session
 from app.config import get_settings
 from app.llm.gemini_client import GeminiLLMClient
 from app.models import ErrorDetail, ErrorEnvelope
+from app.services.booking import BookingService
+from app.services.crm import CrmService
 from app.store.memory_store import InMemorySessionStore
 
 logger = logging.getLogger(__name__)
@@ -67,6 +69,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         chat_model=settings.chat_model,
         analytics_model=settings.analytics_model,
     )
+    app.state.booking_service = BookingService(force_failure=settings.force_booking_failure)
+    app.state.crm_service = CrmService()
     yield
 
 

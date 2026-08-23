@@ -34,7 +34,7 @@ class FakeLLMClient:
         *,
         system: str,
         messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
+        tools: list[types.Tool] | None = None,
     ) -> types.GenerateContentResponse:
         self.calls.append({"system": system, "messages": messages, "tools": tools})
         if self._script:

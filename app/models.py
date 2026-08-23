@@ -61,6 +61,16 @@ class Usage(BaseModel):
     output_tokens: int
 
 
+class BookingResult(BaseModel):
+    ok: bool
+    reference: str | None = None
+    date: str | None = None
+    slot: str | None = None
+    error_code: str | None = None
+    message: str | None = None
+    alternatives: list[str] = Field(default_factory=list)
+
+
 class Session(BaseModel):
     id: str
     channel: Channel

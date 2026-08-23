@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Iterator
 
 import pytest
@@ -6,11 +7,9 @@ from fastapi.testclient import TestClient
 from app.api import chat as chat_module
 from app.api import session as session_module
 from app.main import app
+from app.models import ContactPreference
 from app.store.memory_store import InMemorySessionStore
 from tests.fakes import FakeLLMClient
-
-# DNC short-circuit (no LLM call once do_not_contact is set) is added in Phase 3, once
-# set_contact_preference exists — there is nothing to short-circuit without it yet.
 
 
 @pytest.fixture
@@ -117,3 +116,21 @@ def test_fake_llm_received_the_composed_system_prompt(
     # The volatile live-state block (rules.md A15 — no explicit caching in v1) is appended
     # after the composed prompt, in the same string.
     assert "Current lead profile" in system
+
+
+def test_chat_short_circuits_with_no_llm_call_once_do_not_contact(
+    client: TestClient, fake_llm: FakeLLMClient
+) -> None:
+    session_id = _create_session(client)
+    store = app.dependency_overrides[chat_module.get_session_store]()
+    session = asyncio.run(store.get(session_id))
+    session.contact_preference = ContactPreference.DO_NOT_CONTACT
+    asyncio.run(store.save(session))
+
+    response = client.post(
+        "/api/chat", json={"session_id": session_id, "message": "stop contacting me"}
+    )
+
+    assert response.status_code == 200
+    assert "won't be contacted" in response.json()["reply"]
+    assert len(fake_llm.calls) == 0

@@ -230,7 +230,13 @@ every turn. The tool list is still built once at import time and never reordered
 
 ## 5. Tool Design
 
-Five tools. Each is `strict: true` with `additionalProperties: false`.
+Five tools, declared as `types.Tool(function_declarations=[...])` with an explicit `required`
+list per parameter schema (rules.md A5). **Correction from the pre-D13 draft of this section:**
+there is no Gemini equivalent of OpenAI/Anthropic's `strict: true` /
+`additionalProperties: false` — the live API rejects an `additional_properties` field on a tool
+parameter schema outright (`400 INVALID_ARGUMENT`, "Unknown name additional_properties ... Cannot
+find field"), caught by a live call during Phase 3, not by inspection. `required` is the only
+closed-schema guard Gemini function-calling actually offers.
 
 | Tool | Purpose | Returns |
 |---|---|---|
