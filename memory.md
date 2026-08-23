@@ -3,10 +3,10 @@
 **This is the live state tracker. It is the first file to read when picking work up, and the last
 file to write before putting work down.**
 
-**Last updated:** 2026-08-24 01:15 IST
-**Current phase:** P1 — Knowledge Base & Prompt v1 (gate passed)
-**Overall status:** P0–P1 complete · P2 not begun
-**Elapsed:** ~4.5 h of 24 h · **Remaining:** ~19.5 h
+**Last updated:** 2026-08-24 02:15 IST
+**Current phase:** P2 — Agent Core & Chat API (code complete · live exit-gate checks blocked)
+**Overall status:** P0–P1 complete · P2 code done, unverified live · P3 not begun
+**Elapsed:** ~7.0 h of 24 h · **Remaining:** ~17.0 h
 
 ---
 
@@ -35,7 +35,7 @@ Update rules:
 | — | Foundation documents (these six) | — | Done | 2026-08-23 |
 | P0 | Foundation & Scaffolding | 1.0 h | Gate passed | 2026-08-24 |
 | P1 | Knowledge Base & Prompt v1 | 3.0 h | Gate passed | 2026-08-24 |
-| P2 | Agent Core & Chat API | 2.5 h | Not started | — |
+| P2 | Agent Core & Chat API | 2.5 h | Code complete — live gate blocked | — |
 | P3 | Tools & Booking Simulation | 2.0 h | Not started | — |
 | P4 | Web Interface | 2.5 h | Not started | — |
 | P5 | Analytics Engine | 2.0 h | Not started | — |
@@ -52,7 +52,7 @@ Status values: `Not started` · `In progress` · `Gate passed` · `Blocked` · `
 | F-01 | Natural sales conversation | P1, P2 | Prompt written (P1) — not yet exercised live |
 | F-02 | Multilingual & code-switching | P1, P7 | Prompt written (P1) — not yet exercised live |
 | F-03 | Lead qualification (BANTL) | P1, P3 | Prompt written (P1) — tool wiring is P3 |
-| F-04 | Conversation memory | P2 | Not started |
+| F-04 | Conversation memory | P2 | Code complete — unverified live (billing-blocked) |
 | F-05 | Grounded answers / anti-hallucination | P1, P7 | Prompt written (P1) — hardening is P7 |
 | F-06 | Objection handling | P1, P7 | Prompt written (P1) — hardening is P7 |
 | F-07 | Busy / uninterested / call-later | P1 | Prompt written (P1) — not yet exercised live |
@@ -180,15 +180,80 @@ in `Architecture.md` §8's API contract, rather than introducing a different nam
 **Still open:** Q2 (inbound/outbound greeting framing) — the static greeting itself is a Phase 2
 artifact (`app/api/session.py`), not a Phase 1 module; unresolved until then.
 
+### 2026-08-24 · 02:15 IST — Phase 2: code complete, live exit-gate checks blocked on billing
+
+Verified the installed `anthropic` SDK's actual signatures before writing the wrapper (`output_config`
+with `effort: low|medium|high|xhigh|max`, `messages.parse(output_format=...)`, per-block
+`cache_control` on `TextBlockParam`, the `AuthenticationError → NotFoundError → RateLimitError →
+APIStatusError → (APIConnectionError, APITimeoutError)` hierarchy, `response._request_id` on
+success vs. `exc.request_id` on `APIStatusError`) rather than assuming `rules.md`'s A-rules matched
+the installed version verbatim — they did.
+
+Built: `app/models.py` (`Session`, `LeadProfile`, `ToolEvent`, `Stage`, `ContactPreference`, request/
+response models — `ConversationAnalytics` and `BookingResult` deliberately deferred to P5/P3, not
+built speculatively); `app/llm/base.py` (`LLMClient` Protocol) + `anthropic_client.py` (30s/60s
+timeouts, 1024/4096 max_tokens, low/medium effort, the full A14 exception chain logged via one
+shared `_log_anthropic_errors` context manager rather than duplicated per method); `app/store/
+base.py` + `memory_store.py` (dict-backed, lazy TTL sweep on `get`); `app/agent/orchestrator.py`
+(the §3.2 turn loop — `tool_use` branch is a logged graceful-close stub since no tools exist until
+P3, marked `TODO(P3)`); `app/api/session.py` (`POST /api/session` with a greeting built from
+`load_known_facts()`, never hand-typed — resolves **Q2**: outbound framing, "reaching out about
+{{PROJECT_NAME}}", matching the brief's outbound-agent framing) + `chat.py`; global exception
+handlers in `main.py` mapping the error envelope (§8): `RequestValidationError`→400,
+`HTTPException`→404/409, `anthropic.APIStatusError`/`APIConnectionError`→502 `llm_unavailable`,
+anything else→500, **with a full traceback logged server-side and only the generic envelope ever
+returned to the client (rule C8)**. Rate limiter descoped per `phases.md`'s named Phase 2 descope
+option (length cap kept, enforced by `ChatRequest.message`'s Pydantic `max_length`).
+
+**A real design tension surfaced and resolved:** rule T1 says Tier 1 tests must pass "with no
+`ANTHROPIC_API_KEY` set," but `app/main.py` reads `get_settings()` at import time (by design, for
+the P0 fail-fast gate) and any test importing it to build a `TestClient` triggers that check.
+Resolved by having `tests/conftest.py` set a syntactically-valid dummy key at module scope (before
+any test module import runs) — this satisfies startup validation without a real credential, while
+`FakeLLMClient` (`tests/fakes.py`, built from real `anthropic.types.Message` objects so the fake is
+structurally honest) guarantees zero real network calls, which is what T1 actually protects
+against. Documented here rather than silently reinterpreting the rule.
+
+**Verified live via `curl`, not just by reading the code:**
+- `POST /api/session` → 201, real greeting rendered from the facts YAML.
+- `POST /api/chat` on an unknown session → 404 `session_not_found`.
+- `POST /api/chat` with a 2001-char message → 400 `invalid_request` (via Pydantic, not
+  hand-rolled).
+- `POST /api/chat` against a **real but out-of-credit** Anthropic key → the SDK's `401`→`400`
+  reached `AuthenticationError`/`APIStatusError` handling correctly, logged with `request_id`,
+  and the client got a clean 502 `llm_unavailable` envelope — **zero stack trace leaked**, verified
+  by reading the raw HTTP response, not assumed.
+- `pytest` (bare) — 18/18 pass, no `ANTHROPIC_API_KEY` env var set. `ruff check`/`format --check`
+  clean.
+
+**Blocked, not skipped:** the user provided a real `ANTHROPIC_API_KEY` (now in this session's
+history — flagged to them to rotate it in the console once no longer needed) specifically to run
+the Phase 2 exit gate's live checks. The key is valid and the full request/response path down to
+Anthropic's servers is confirmed working end-to-end — but the account has **no credit balance**
+(`"Your credit balance is too low to access the Anthropic API"`, confirmed via a direct SDK call,
+not inferred). The user chose to proceed without live verification rather than wait on billing.
+**Still unverified, by explicit user decision, not by omission:**
+- F-04 (conversation memory) — a real 10-turn conversation never re-asking an answered question.
+- F-02 (language mirroring) — a real Hindi/Hinglish opener producing a same-script reply.
+- A11 (prompt caching) — `cache_read_input_tokens > 0` from turn 2 onward against the real API.
+- `/docs` rendering a usable Swagger UI for a manual reviewer walkthrough (not yet opened in a
+  browser).
+
+`.env` now holds the user's real key locally (gitignored, confirmed via `git check-ignore`) for
+whenever they want to re-run this themselves or ask for a retry.
+
 ---
 
 ## 3. Currently Working On
 
 **File:** *none — between phases*
-**Phase:** P1 gate passed; P2 not started
-**Next action:** `app/llm/base.py` (`LLMClient` Protocol), then `app/llm/anthropic_client.py`
-(SDK wrapper — explicit timeouts, `max_tokens`, `output_config.effort`, prompt caching with the
-volatile-state second system block, the A14 exception chain).
+**Phase:** P2 code complete; live exit-gate checks blocked on the user's Anthropic account
+having no credit balance (not a code defect — the request/response path was confirmed working
+end-to-end against the real API up to the billing rejection).
+**Next action:** proceeding to P3 per the user's explicit choice. When the user has billing sorted
+and wants it, re-run the P2 live checks (10-turn coherence, language mirroring, `cache_read_input_
+tokens > 0` from turn 2) using the key already saved in their local `.env` — do not re-ask for the
+key.
 
 > Exactly one entry belongs here at any time. Replace it, do not append.
 
@@ -196,17 +261,18 @@ volatile-state second system block, the A14 exception chain).
 
 ## 4. Next Up (immediate queue)
 
-1. **P2 · `app/llm/base.py` + `anthropic_client.py`** — the `LLMClient` Protocol and the SDK
-   wrapper (rules A2–A5, A11–A14).
-2. **P2 · `app/models.py`** — `Session`, `LeadProfile`, `ToolEvent`, `Stage`, request/response
-   models.
-3. **P2 · `app/store/base.py` + `memory_store.py`** — `SessionStore` Protocol + dict-backed store
-   with TTL sweep.
-4. **P2 · `app/agent/orchestrator.py`** — the turn loop (`Architecture.md` §3.2), no tool dispatch
-   yet (that's P3).
-5. **P2 · `app/api/session.py`, `app/api/chat.py`** — endpoints, guardrails (2000-char cap, rate
-   limit, ended-session check), global exception handlers → the error envelope (§8).
-6. **P2 · `tests/fakes.py`** (`FakeLLMClient`) + `tests/test_api.py`.
+1. **P3 · `app/services/booking.py`** — slot generation, Indian mobile validation, the four
+   deterministic failure modes, `FORCE_BOOKING_FAILURE` injection.
+2. **P3 · `app/services/crm.py`** — escalation tickets, DNC register, lead records.
+3. **P3 · `app/agent/tools.py`** — the five tool schemas (`strict: true`, `additionalProperties:
+   false`) + dispatch table + `ToolEvent` recording.
+4. **P3 · Wire dispatch into `orchestrator.py`** — replace the `TODO(P3)` stub: parallel tool
+   execution, all results in one user message (A8), `is_error: true` + recovery hint on failure
+   (A9), DNC short-circuit with no LLM call.
+5. **P3 · `tests/test_booking.py`** (every failure mode) + `tests/test_orchestrator.py` (loop,
+   parallel results, iteration cap, error path).
+6. **Deferred, ask the user when relevant:** re-run the P2 live exit-gate checks once their
+   Anthropic account has a credit balance (key already in `.env`).
 
 ---
 

@@ -31,6 +31,13 @@ def _load_facts() -> dict[str, Any]:
         return yaml.safe_load(f)
 
 
+@lru_cache
+def load_known_facts() -> dict[str, Any]:
+    """Public accessor for code outside the prompt (e.g. the static greeting) that still
+    must draw facts from data/project_facts.yaml, never type them (rules.md P2, PR2)."""
+    return _load_facts()["known"]
+
+
 def _known_facts_table(known: dict[str, Any]) -> str:
     rows = [
         ("Developer", known["developer"]),
