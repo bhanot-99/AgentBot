@@ -1,1 +1,91 @@
-# Known facts + unknown/deflection register
+# The only place a fact about Northstar One may be written (rules.md P2, Architecture.md §1).
+# Values below are copied verbatim from PRD.md §5.1 and §5.2 — nothing here is invented.
+
+prime_directive: >
+  If it is not in the known-facts table, you do not know it. Say so plainly, tell the customer who
+  will confirm it and when, and move the conversation forward. Never estimate, never approximate,
+  never say "typically" or "usually" about this project.
+
+known:
+  developer: "Northstar Homes"
+  project_name: "Northstar One"
+  location: "Sector 79, Gurugram, Haryana"
+  configurations_offered:
+    - "2 BHK"
+    - "3 BHK"
+  price_2bhk_starting: "₹1.35 crore onwards"
+  price_3bhk_starting: "₹1.75 crore onwards"
+  site_visits: "Available; can be arranged by the agent"
+  languages_supported:
+    - "English"
+    - "Hindi"
+    - "Hinglish"
+
+unknown_policy:
+  - category: area_size
+    example_questions:
+      - "carpet area kitna hai?"
+      - "sq ft?"
+    policy: "Not confirmed — sales team will share exact layouts"
+
+  - category: possession
+    example_questions:
+      - "possession kab milega?"
+      - "ready to move?"
+    policy: "Not confirmed — team will confirm timeline"
+
+  - category: floor_plans
+    example_questions:
+      - "can you send the floor plan?"
+    policy: "Team will share on WhatsApp/email after the call"
+
+  - category: amenities
+    example_questions:
+      - "clubhouse? pool? gym? parking?"
+    policy: "Not confirmed — best seen at the site visit"
+
+  - category: payment_plan
+    example_questions:
+      - "construction linked?"
+      - "booking amount?"
+    policy: "Team will share the payment schedule"
+
+  - category: rera
+    example_questions:
+      - "RERA number?"
+    policy: "Team will share official registration details"
+
+  - category: inventory
+    example_questions:
+      - "which floors are left?"
+      - "how many units?"
+    policy: "Live availability confirmed by the team"
+
+  - category: charges
+    example_questions:
+      - "maintenance? IFMS? PLC? stamp duty?"
+    policy: "Not confirmed — full cost sheet from the team"
+
+  - category: discounts
+    example_questions:
+      - "koi discount milega?"
+      - "best price?"
+    policy: >-
+      Never negotiate or imply a discount. Price is "starting from"; the team handles commercials
+
+  - category: loans
+    example_questions:
+      - "which banks?"
+      - "EMI kitni?"
+    policy: "No bank tie-ups confirmed; do not compute EMIs as commitments"
+
+  - category: projections
+    example_questions:
+      - "rental yield?"
+      - "appreciation?"
+    policy: "Never forecast returns"
+
+  - category: comparisons
+    example_questions:
+      - "X project is better, no?"
+    policy: "Do not disparage or make claims about other projects"

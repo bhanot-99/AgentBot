@@ -3,10 +3,10 @@
 **This is the live state tracker. It is the first file to read when picking work up, and the last
 file to write before putting work down.**
 
-**Last updated:** 2026-08-24 00:10 IST
-**Current phase:** P0 — Foundation & Scaffolding (gate passed)
-**Overall status:** P0 complete · P1 not begun
-**Elapsed:** ~1.5 h of 24 h · **Remaining:** ~22.5 h
+**Last updated:** 2026-08-24 01:15 IST
+**Current phase:** P1 — Knowledge Base & Prompt v1 (gate passed)
+**Overall status:** P0–P1 complete · P2 not begun
+**Elapsed:** ~4.5 h of 24 h · **Remaining:** ~19.5 h
 
 ---
 
@@ -34,7 +34,7 @@ Update rules:
 | — | Assignment analysis | — | Done | 2026-08-23 |
 | — | Foundation documents (these six) | — | Done | 2026-08-23 |
 | P0 | Foundation & Scaffolding | 1.0 h | Gate passed | 2026-08-24 |
-| P1 | Knowledge Base & Prompt v1 | 3.0 h | Not started | — |
+| P1 | Knowledge Base & Prompt v1 | 3.0 h | Gate passed | 2026-08-24 |
 | P2 | Agent Core & Chat API | 2.5 h | Not started | — |
 | P3 | Tools & Booking Simulation | 2.0 h | Not started | — |
 | P4 | Web Interface | 2.5 h | Not started | — |
@@ -49,19 +49,19 @@ Status values: `Not started` · `In progress` · `Gate passed` · `Blocked` · `
 
 | ID | Feature | Phase | Status |
 |---|---|---|---|
-| F-01 | Natural sales conversation | P1, P2 | Not started |
-| F-02 | Multilingual & code-switching | P1, P7 | Not started |
-| F-03 | Lead qualification (BANTL) | P1, P3 | Not started |
+| F-01 | Natural sales conversation | P1, P2 | Prompt written (P1) — not yet exercised live |
+| F-02 | Multilingual & code-switching | P1, P7 | Prompt written (P1) — not yet exercised live |
+| F-03 | Lead qualification (BANTL) | P1, P3 | Prompt written (P1) — tool wiring is P3 |
 | F-04 | Conversation memory | P2 | Not started |
-| F-05 | Grounded answers / anti-hallucination | P1, P7 | Not started |
-| F-06 | Objection handling | P1, P7 | Not started |
-| F-07 | Busy / uninterested / call-later | P1 | Not started |
-| F-08 | Do-not-contact compliance | P1, P3 | Not started |
+| F-05 | Grounded answers / anti-hallucination | P1, P7 | Prompt written (P1) — hardening is P7 |
+| F-06 | Objection handling | P1, P7 | Prompt written (P1) — hardening is P7 |
+| F-07 | Busy / uninterested / call-later | P1 | Prompt written (P1) — not yet exercised live |
+| F-08 | Do-not-contact compliance | P1, P3 | Prompt written (P1) — code short-circuit is P3 |
 | F-09 | Site-visit booking | P3 | Not started |
 | F-10 | Booking-failure recovery | P3, P7 | Not started |
 | F-11 | Human escalation | P3 | Not started |
-| F-12 | Proper conversation ending | P1 | Not started |
-| F-13 | Channel duality (chat / voice) | P1, P7 | Not started |
+| F-12 | Proper conversation ending | P1 | Prompt written (P1) — not yet exercised live |
+| F-13 | Channel duality (chat / voice) | P1, P7 | Prompt written (P1) — hardening is P7 |
 | F-14 | Post-conversation analytics | P5 | Not started |
 | F-15 | Web chat interface | P4 | Not started |
 | F-16 | Test evidence | P6 | Not started |
@@ -133,14 +133,62 @@ invisible without executing the log call.
 `app/main.py` lifespan is an intentional no-op with `# TODO(P2): construct the LLMClient and
 SessionStore singletons here` — those seams don't exist until Phase 2.
 
+### 2026-08-24 · 01:15 IST — Phase 1 gate passed
+
+Branch `phase-0` renamed to `p0-p4` (this branch now carries Phases 0–4 through to the Web UI).
+
+`data/project_facts.yaml`: the five known facts and all twelve deflection categories, copied
+verbatim from `PRD.md` §5.1/§5.2 — nothing invented (rule P2). Wrote all nine prompt modules
+(`Architecture.md` §4), each with the required worked example(s): `20_language.md` has all three
+scripts plus a mid-conversation switch; `40_objections.md` covers all twelve PRD F-06 objections
+verbatim, each with one sample line; `50_edge_cases.md` covers all eight required cases.
+
+`app/agent/prompt_builder.py`: loads `project_facts.yaml`, renders `{{PLACEHOLDER}}` tokens (a
+small regex substitution — no Jinja2, to stay inside the six-dependency budget) across every
+module, not just `10_knowledge_base.md`, so no prompt module hand-types a fact PR2 says must be
+rendered. Raises `KeyError` on any placeholder with no matching value, so a typo'd placeholder
+fails the build instead of shipping literal `{{TEXT}}` into the system prompt. `build(channel)` is
+`lru_cache`d per `Architecture.md` §4 ("cache the composed string per channel").
+`scripts/export_prompt.py` writes both variants to `prompts/FINAL_PROMPT.md` with a generated/
+do-not-edit banner (rule PR6).
+
+**Two real bugs found and fixed during the manual read-through (rule AI10), not by a tool:**
+1. `00_identity.md` hardcoded "Northstar One" once instead of using `{{PROJECT_NAME}}` — a literal
+   PR2 violation (a fact typed instead of rendered) that no test would have caught, since the
+   literal text happens to match the current YAML value.
+2. `71_channel_voice.md` had a typo — "asterrisk" — inside the one worked example in that module.
+
+**Token budget:** initial draft was ~5,050 tokens (chat) / ~5,220 (voice), over the 2,500–4,500
+target (`phases.md` P1 exit gate). Trimmed by cutting restated guardrail prose from
+`40_objections.md`/`50_edge_cases.md` (the rule already lives once in `60_guardrails.md` — repeating
+it per-entry was tokens not doing work, per rule AI10) and removing a duplicated prime-directive
+quote block. Final, char-count-estimated (`len(prompt) // 4`, no live tokenizer call was made — no
+API key used this phase): **chat ≈ 4,306 tokens, voice ≈ 4,482 tokens.** Both inside target.
+
+`tests/conftest.py` implemented (was a stub) — inserts the repo root onto `sys.path` so `import
+app.*` resolves whether pytest is invoked as `pytest` or `python -m pytest`; without it, bare
+`pytest` failed with `ModuleNotFoundError` even though `python -m pytest` passed. A reviewer is
+more likely to type the bare form.
+
+**Verified live:**
+- `python scripts/export_prompt.py` writes both variants; zero unrendered `{{...}}` in the output.
+- `pytest` (bare invocation) — 9/9 pass, **no `ANTHROPIC_API_KEY` set** (rule T1).
+- `ruff check .` / `ruff format --check .` clean.
+
+**Open question resolved:** Q1 (agent name) — used **Aarav**, matching the worked example already
+in `Architecture.md` §8's API contract, rather than introducing a different name.
+**Still open:** Q2 (inbound/outbound greeting framing) — the static greeting itself is a Phase 2
+artifact (`app/api/session.py`), not a Phase 1 module; unresolved until then.
+
 ---
 
 ## 3. Currently Working On
 
 **File:** *none — between phases*
-**Phase:** P0 gate passed; P1 not started
-**Next action:** `data/project_facts.yaml` — the five known facts and the twelve deflection
-categories, nothing invented (`rules.md` P2). This file gates every prompt module downstream.
+**Phase:** P1 gate passed; P2 not started
+**Next action:** `app/llm/base.py` (`LLMClient` Protocol), then `app/llm/anthropic_client.py`
+(SDK wrapper — explicit timeouts, `max_tokens`, `output_config.effort`, prompt caching with the
+volatile-state second system block, the A14 exception chain).
 
 > Exactly one entry belongs here at any time. Replace it, do not append.
 
@@ -148,10 +196,17 @@ categories, nothing invented (`rules.md` P2). This file gates every prompt modul
 
 ## 4. Next Up (immediate queue)
 
-1. **P1 · `data/project_facts.yaml`** — the five known facts and the twelve deflection categories.
-   Nothing invented (`rules.md` P2). This file gates everything downstream.
-3. **P1 · Prompt modules** — write all nine, with worked examples in every behavioural module.
-4. **P1 · `scripts/export_prompt.py`** → `prompts/FINAL_PROMPT.md`, plus the prompt-builder tests.
+1. **P2 · `app/llm/base.py` + `anthropic_client.py`** — the `LLMClient` Protocol and the SDK
+   wrapper (rules A2–A5, A11–A14).
+2. **P2 · `app/models.py`** — `Session`, `LeadProfile`, `ToolEvent`, `Stage`, request/response
+   models.
+3. **P2 · `app/store/base.py` + `memory_store.py`** — `SessionStore` Protocol + dict-backed store
+   with TTL sweep.
+4. **P2 · `app/agent/orchestrator.py`** — the turn loop (`Architecture.md` §3.2), no tool dispatch
+   yet (that's P3).
+5. **P2 · `app/api/session.py`, `app/api/chat.py`** — endpoints, guardrails (2000-char cap, rate
+   limit, ended-session check), global exception handlers → the error envelope (§8).
+6. **P2 · `tests/fakes.py`** (`FakeLLMClient`) + `tests/test_api.py`.
 
 ---
 
