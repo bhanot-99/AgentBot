@@ -3,11 +3,10 @@
 **This is the live state tracker. It is the first file to read when picking work up, and the last
 file to write before putting work down.**
 
-**Last updated:** 2026-08-24 06:05 IST
-**Current phase:** P3 — Tools & Booking Simulation (gate fully passed, every exit-gate item
-verified live, including the two deferred by the earlier quota block)
-**Overall status:** P0–P3 complete and live-verified · P4 not begun
-**Elapsed:** ~10.5 h of 24 h · **Remaining:** ~13.5 h
+**Last updated:** 2026-08-24 07:30 IST
+**Current phase:** P4 — Web Interface (gate passed, browser-verified via headless Chrome + CDP)
+**Overall status:** P0–P4 complete and live-verified · P5 not begun
+**Elapsed:** ~13.0 h of 24 h · **Remaining:** ~11.0 h
 
 ---
 
@@ -38,7 +37,7 @@ Update rules:
 | P1 | Knowledge Base & Prompt v1 | 3.0 h | Gate passed | 2026-08-24 |
 | P2 | Agent Core & Chat API | 2.5 h | Gate passed | 2026-08-24 |
 | P3 | Tools & Booking Simulation | 2.0 h | Gate passed | 2026-08-24 |
-| P4 | Web Interface | 2.5 h | Not started | — |
+| P4 | Web Interface | 2.5 h | Gate passed | 2026-08-24 |
 | P5 | Analytics Engine | 2.0 h | Not started | — |
 | P6 | Test Harness & Scenarios | 2.5 h | Not started | — |
 | P7 | Prompt Hardening | 3.0 h | Not started | — |
@@ -64,7 +63,7 @@ Status values: `Not started` · `In progress` · `Gate passed` · `Blocked` · `
 | F-12 | Proper conversation ending | P1 | Prompt written (P1) — not yet exercised live |
 | F-13 | Channel duality (chat / voice) | P1, P7 | Verified live on both channels — voice number verbalisation and word cap confirmed; hardening (P7) still ahead |
 | F-14 | Post-conversation analytics | P5 | Not started |
-| F-15 | Web chat interface | P4 | Not started |
+| F-15 | Web chat interface | P4 | **Verified live in a real browser** — full conversation completes, tool trace and Devanagari confirmed, dark mode and 360px confirmed |
 | F-16 | Test evidence | P6 | Not started |
 
 ---
@@ -465,17 +464,78 @@ Phase 3's exit gate is now fully live-verified, not partially. `gemini-3.1-flash
 correctly ran the full `update_lead_profile → check_slot_availability → book_site_visit` sequence
 on the happy path first, confirming tool-calling behaviour isn't `gemini-3.6-flash`-specific.
 
+### 2026-08-24 · 07:30 IST — Phase 4 gate passed: web interface built and browser-verified
+
+Built all three static files from stubs: `app/static/index.html` (header with the north-star
+mark, channel toggle, theme toggle, mobile rail-toggle chevron; message list as `role="log"
+aria-live="polite"`; composer; "End conversation"; a tool-trace panel and an analytics panel that
+renders whatever `POST /api/session/{id}/end` returns as raw JSON — honest about P5 not existing
+yet rather than inventing fields), `app/static/styles.css` (the full token set from `design.md`
+§7, light/dark/system theme switching per §2.4, all components in §5), `app/static/app.js`
+(session bootstrap, send/receive, typing indicator, tool-trace rendering with failed rows expanded
+by default per §5.7, channel-switch-starts-a-new-session per §5.6, error toasts from the error
+envelope — `textContent` only, confirmed zero `innerHTML` calls, rule C9).
+
+**No Chrome extension available in this sandbox**, so verified in a real browser a different way:
+launched headless Chrome with `--remote-debugging-port`, drove it directly over the DevTools
+Protocol via the `websockets` package (no Playwright install needed) — real `Page.navigate`,
+`Runtime.evaluate`, `Emulation.setDeviceMetricsOverride`, `Page.captureScreenshot` calls against
+the actual running `uvicorn` server, not a static render.
+
+**Two real bugs caught by looking at the screenshots, not by reading the CSS:**
+1. At 360px the header's title truncated to "N…" — the channel toggle, theme icon, and rail
+   chevron left too little room on one 64px row. Fixed by wrapping the header to two rows below
+   420px (brand on its own row, controls below) rather than shrinking text or icons below
+   legibility/touch-target size.
+2. The composer's placeholder text ("Type a message… (Enter to send, Shift+Enter for a new
+   line)") wrapped to two lines and grew the input box, since only `min-height`/`max-height` were
+   set — Chromium's default field-sizing grows to fit content (including a wrapped placeholder)
+   when no explicit `height` is set. Fixed with an explicit starting `height: 24px` plus
+   `overflow: hidden`; `autoGrowComposer()`'s `input`-event resize takes over once the user types.
+
+**Also caught, not part of the original design.md spec but required by its own §6:** `.icon-button`
+was 40×40px and `.channel-toggle__option` had `min-height: 34px` — both below design.md's own
+"touch targets ≥ 44×44px, including the theme and channel toggles" rule. Bumped both to 44px. The
+composer's send button stays at 40px per its own explicit §5.5 spec, which names 40px directly —
+not the same oversight, a deliberate exception the design doc already made.
+
+**Verified live in the browser, not just read from the DOM:**
+- A real conversation end-to-end through the actual UI (composer → fetch → orchestrator → real
+  Gemini call → tool dispatch where relevant → rendered reply), using the `gemini-3.1-flash-lite`
+  dev key from the P3 quota workaround.
+- Typing indicator appears while waiting, clears on reply.
+- Devanagari renders with real glyphs (no tofu boxes) and gets `lang="hi"` via a Unicode-range
+  detection in `langFor()`.
+- Tool trace panel: OK rows collapsed, FAILED rows expanded by default, JSON input/output visible,
+  status carried by a dot **and** a text label (never colour alone, per design.md §6).
+- Light theme, explicit dark theme, and the two-row mobile header all screenshotted and confirmed
+  after the fixes above.
+- Zero console errors on a fresh load (the initial run had one — a `favicon.ico` 404 — fixed with
+  an inline-SVG-data-URI favicon using the same north-star mark, so a reviewer's devtools stays
+  clean).
+
+**Not built, correctly, because P5 doesn't exist yet:** the analytics panel shows the raw
+`POST .../end` response (`{session_id, ended_at}` today) rather than a scored summary — this is
+the named P4 descope option ("keep a raw JSON view"), not a gap.
+
+`pytest` — 46/46 pass (no backend code changed this phase). `ruff check`/`format --check` clean.
+`node --check app/static/app.js` clean (JS syntax only — no linter configured for JS, out of the
+approved-stack budget per `rules.md` §2).
+
 ---
 
 ## 3. Currently Working On
 
 **File:** *none — between phases*
-**Phase:** P3 gate fully passed, including live verification of every exit-gate item. On branch
-`booking-tools-ui`, ready to start P4 (Web Interface) — the other phase this branch was created
-for.
-**Next action:** **P4 — Web Interface**: `app/static/index.html`, `styles.css`, `app.js` per
-`phases.md` P4 tasks — chat pane, tool-trace panel, channel toggle, analytics panel (stub until
-P5).
+**Phase:** P4 gate passed, browser-verified. On branch `booking-tools-ui`, ready to start P5
+(Analytics Engine) — the phase this branch's sibling `agent-chat-core` will eventually merge in
+front of, per `phases.md`'s critical path P1→P2→P3→P5→P6→P7.
+**Next action:** **P5 — Analytics Engine**: `ConversationAnalytics` Pydantic model (PRD §7 field
+set), `app/agent/analytics.py` (extraction prompt + `response_schema`, reading `response.parsed`),
+the deterministic-overwrite step (D6) from the tool-event log, `app/services/scoring.py`
+(hot/warm/cold + 0–100 score), and wiring `POST /api/session/{id}/end` /
+`GET /api/session/{id}/analytics` / `GET /api/session/{id}/transcript` to return the real record —
+which the P4 analytics panel already knows how to display as JSON without any frontend change.
 
 > Exactly one entry belongs here at any time. Replace it, do not append.
 
@@ -483,18 +543,22 @@ P5).
 
 ## 4. Next Up (immediate queue)
 
-1. **P4 · `app/static/index.html`** — header, chat pane, composer, channel toggle, "End
-   conversation" button, analytics panel, tool-trace panel.
-2. **P4 · `app/static/styles.css`** — tokens from `design.md`, light + dark, Devanagari-safe font
-   stack, responsive to 360px.
-3. **P4 · `app/static/app.js`** — session bootstrap, send/receive, typing indicator, `textContent`
-   rendering (never `innerHTML`, rule C9), live tool-event trace, error toasts from the error
-   envelope.
-4. **Before shipping (P8 or a final pre-submission pass):** confirm `.env`'s `CHAT_MODEL`/
+1. **P5 · `ConversationAnalytics` model** — full PRD §7 field set with enums.
+2. **P5 · `app/agent/analytics.py`** — extraction prompt, `response_schema=ConversationAnalytics`,
+   `response.parsed`.
+3. **P5 · Deterministic overwrite (D6)** — `site_visit_status`, `booking_reference`,
+   `escalated_to_human`, `contact_preference`, `turn_count`, `duration_seconds` from the tool-event
+   log, never the model.
+4. **P5 · `app/services/scoring.py`** — hot/warm/cold rules, 0–100 score.
+5. **P5 · Wire the three endpoints** — `POST /api/session/{id}/end` (replace the P0 stub),
+   `GET /api/session/{id}/analytics`, `GET /api/session/{id}/transcript`.
+6. **P5 · Failure path** — one retry, then a partial record from deterministic fields only,
+   `summary = "Analytics extraction failed"`, never a fabricated record.
+7. **Before shipping (P8 or a final pre-submission pass):** confirm `.env`'s `CHAT_MODEL`/
    `ANALYTICS_MODEL` are back on `gemini-3.6-flash` — a reviewer cloning the repo uses
    `.env.example`'s default regardless, but re-run one live conversation against `gemini-3.6-flash`
    specifically before recording the final demo, not just the dev-model stand-in.
-5. **Deferred, ask the user when relevant:** re-run the P2 live exit-gate checks once their
+8. **Deferred, ask the user when relevant:** re-run the P2 live exit-gate checks once their
    Anthropic account has a credit balance (key already in `.env`) — no longer load-bearing since
    the project moved to Gemini (D13), kept only in case Anthropic is ever revisited.
 
@@ -559,7 +623,7 @@ Scenario failures land here from the Phase 6 run and are worked in severity orde
 |---|---|---|
 | `prompts/FINAL_PROMPT.md` (both channel variants) | P1 | Not started |
 | FastAPI backend | P0–P5 | Not started |
-| Web chat interface | P4 | Not started |
+| Web chat interface | P4 | Done — `app/static/{index.html,styles.css,app.js}` |
 | `data/project_facts.yaml` | P1 | Not started |
 | `docs/TEST_RESULTS.md` | P6, P7 | Not started |
 | `README.md` (run · assumptions · limitations · AI tools) | P8 | Not started |
