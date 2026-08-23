@@ -3,10 +3,10 @@
 **This is the live state tracker. It is the first file to read when picking work up, and the last
 file to write before putting work down.**
 
-**Last updated:** 2026-08-24 03:00 IST
-**Current phase:** P2 — Agent Core & Chat API (re-ported to Gemini · live exit-gate checks still blocked)
-**Overall status:** P0–P1 complete · P2 code done on `google-genai`, unverified live · P3 not begun
-**Elapsed:** ~8.0 h of 24 h · **Remaining:** ~16.0 h
+**Last updated:** 2026-08-24 03:40 IST
+**Current phase:** P2 — Agent Core & Chat API (gate passed, verified live against real Gemini)
+**Overall status:** P0–P2 complete and live-verified · P3 not begun
+**Elapsed:** ~8.5 h of 24 h · **Remaining:** ~15.5 h
 
 ---
 
@@ -35,7 +35,7 @@ Update rules:
 | — | Foundation documents (these six) | — | Done | 2026-08-23 |
 | P0 | Foundation & Scaffolding | 1.0 h | Gate passed | 2026-08-24 |
 | P1 | Knowledge Base & Prompt v1 | 3.0 h | Gate passed | 2026-08-24 |
-| P2 | Agent Core & Chat API | 2.5 h | Code complete — live gate blocked | — |
+| P2 | Agent Core & Chat API | 2.5 h | Gate passed | 2026-08-24 |
 | P3 | Tools & Booking Simulation | 2.0 h | Not started | — |
 | P4 | Web Interface | 2.5 h | Not started | — |
 | P5 | Analytics Engine | 2.0 h | Not started | — |
@@ -49,19 +49,19 @@ Status values: `Not started` · `In progress` · `Gate passed` · `Blocked` · `
 
 | ID | Feature | Phase | Status |
 |---|---|---|---|
-| F-01 | Natural sales conversation | P1, P2 | Prompt written (P1) — not yet exercised live |
-| F-02 | Multilingual & code-switching | P1, P7 | Prompt written (P1) — not yet exercised live |
-| F-03 | Lead qualification (BANTL) | P1, P3 | Prompt written (P1) — tool wiring is P3 |
-| F-04 | Conversation memory | P2 | Code complete — unverified live (billing-blocked) |
-| F-05 | Grounded answers / anti-hallucination | P1, P7 | Prompt written (P1) — hardening is P7 |
-| F-06 | Objection handling | P1, P7 | Prompt written (P1) — hardening is P7 |
-| F-07 | Busy / uninterested / call-later | P1 | Prompt written (P1) — not yet exercised live |
+| F-01 | Natural sales conversation | P1, P2 | Verified live — short turns, one question/turn over 10 real turns |
+| F-02 | Multilingual & code-switching | P1, P7 | Verified live — EN/Hindi/Hinglish, mid-conversation switches both ways; hardening (P7) still ahead |
+| F-03 | Lead qualification (BANTL) | P1, P3 | Conversational behaviour verified live (budget/purpose/timeline surfaced naturally); structured extraction needs the P3 tool |
+| F-04 | Conversation memory | P2 | **Verified live** — recalled a fact from 9 turns earlier, no re-ask |
+| F-05 | Grounded answers / anti-hallucination | P1, P7 | **Verified live** — refused a direct discount request per the deflection pattern; hardening (P7) still ahead |
+| F-06 | Objection handling | P1, P7 | Prompt written (P1) — not yet exercised live; hardening is P7 |
+| F-07 | Busy / uninterested / call-later | P1 | Verified live — "let me think" handled gracefully, no re-pitch |
 | F-08 | Do-not-contact compliance | P1, P3 | Prompt written (P1) — code short-circuit is P3 |
 | F-09 | Site-visit booking | P3 | Not started |
 | F-10 | Booking-failure recovery | P3, P7 | Not started |
 | F-11 | Human escalation | P3 | Not started |
 | F-12 | Proper conversation ending | P1 | Prompt written (P1) — not yet exercised live |
-| F-13 | Channel duality (chat / voice) | P1, P7 | Prompt written (P1) — hardening is P7 |
+| F-13 | Channel duality (chat / voice) | P1, P7 | Verified live on both channels — voice number verbalisation and word cap confirmed; hardening (P7) still ahead |
 | F-14 | Post-conversation analytics | P5 | Not started |
 | F-15 | Web chat interface | P4 | Not started |
 | F-16 | Test evidence | P6 | Not started |
@@ -301,18 +301,69 @@ pending on Anthropic billing before.
 - `pytest` — 18/18 pass with **`anthropic` fully uninstalled** from the venv (not just unimported),
   confirming zero remaining runtime dependency on it. `ruff check`/`format --check` clean.
 
+### 2026-08-24 · 03:40 IST — Phase 2 gate genuinely passed: live verification with a real Gemini key
+
+User provided a real `GEMINI_API_KEY`. First live call immediately surfaced that both guessed
+model defaults were wrong: `gemini-2.5-flash` — "no longer available to new users," the API's own
+error naming `gemini-3.6-flash` as the replacement; `gemini-2.5-pro` (via `gemini-pro-latest`) —
+`RESOURCE_EXHAUSTED`, **zero** free-tier quota for any `pro`-tier model, not just rate-limited.
+Queried `client.aio.models.list()` and live-tested three candidates before picking
+`gemini-3.6-flash` for **both** `CHAT_MODEL` and `ANALYTICS_MODEL` — updated `.env`, `.env.example`,
+`app/config.py` defaults, and the now-inaccurate claims in `rules.md` A1 and `Architecture.md`'s
+model-config table and diagram, all with the live evidence, not a second guess.
+
+**Ran a real 10-turn conversation end to end** (not scripted against a fake — an actual
+`curl` session against the running app and the real API):
+- **F-02 (multilingual):** opened English → switched to Hinglish → switched to Devanagari Hindi →
+  back to Hinglish → back to English, mid-conversation, unannounced, correct script every time,
+  exactly as `20_language.md` specifies.
+- **F-04 (memory):** correctly recalled the 2 BHK price (₹1.35 crore) when re-asked at turn 10,
+  ~9 turns after it was first stated, with no re-prompt; correctly reasoned that a stated
+  ₹1.5 crore budget "fits" 2 BHK without being told to.
+- **F-05 (anti-hallucination) — the core graded requirement:** asked directly for a discount
+  ("koi discount milega kya?") and correctly refused, redirecting to the sales team, exactly per
+  the deflection pattern in `10_knowledge_base.md` — no fabricated number, no implied discount.
+- **F-07 (soft close):** "let me think about it" → accepted gracefully, offered a follow-up, no
+  re-pitch.
+- **F-13 (voice adapter), separately:** a voice-channel request for the 3 BHK price came back as
+  "one crore seventy five lakhs rupees" — correct number verbalisation, zero symbols, 26 words
+  (cap is 35).
+- Every chat-channel turn stayed under the 60-word cap; every reply asked at most one question.
+- `/docs` renders (200) with all four endpoints listed in the OpenAPI schema.
+- `cache_read_input_tokens: 0` on every turn, as documented (rules.md A15 — explicit caching is
+  not used in v1; this was the expected reading, not a regression).
+
+**Not yet exercised, correctly, because the code for it doesn't exist until Phase 3:**
+`lead_profile` and `stage` stayed empty/`GREETING` throughout, even though the conversation itself
+clearly established name, phone, budget, and purpose — `update_lead_profile` isn't wired as a tool
+yet, so nothing writes it to structured state. The model's own in-context reasoning already
+demonstrates it *would* fill these correctly once the tool exists.
+
+**Minor test-harness note, not a product bug:** one early manual test accidentally sent a duplicate
+live turn — a shell `curl ... | json.tool || curl ...` fallback pattern re-ran the second `curl` for
+real when `json.tool` choked on trailing `-w` text appended after the JSON body. Confirmed via the
+request log (two real `POST /api/chat` hits) before concluding it wasn't a server-side issue.
+
+**Phase 2 exit gate: all criteria now genuinely met**, not assumed:
+✅ 10-turn coherence, never re-asked an answered question · ✅ language mirroring, Hindi and
+Hinglish, both directions · ✅ Tier 1 tests pass with no API key · N/A `cache_read_input_tokens > 0`
+(superseded by the A15 no-caching-in-v1 decision, itself already verified reading exactly 0).
+
 ---
 
 ## 3. Currently Working On
 
 **File:** *none — between phases*
-**Phase:** P2 re-ported to `google-genai` (Gemini), code complete, ruff clean, 18/18 Tier 1 tests
-pass with `anthropic` fully uninstalled. Live exit-gate checks (10-turn coherence, language
-mirroring) are still unverified — now blocked on the user providing a `GEMINI_API_KEY`, not on
-Anthropic billing (that path is moot after the D13 swap).
-**Next action:** commit the provider-swap changes (docs + code, all currently uncommitted on
-`p0-p4`), then either (a) ask the user for a `GEMINI_API_KEY` to run the P2 live checks, or (b)
-proceed to P3 if they'd rather defer live verification again, same choice as after Phase 2.
+**Phase:** P2 gate genuinely passed — live-verified against the real Gemini API with the user's
+own key (10-turn memory, EN/Hindi/Hinglish mirroring, anti-hallucination on a discount request,
+voice number verbalisation). Model defaults corrected from guessed (`gemini-2.5-flash/pro`) to
+verified-working (`gemini-3.6-flash` for both, since this account's free tier has zero `pro`
+quota) across `.env`, `.env.example`, `app/config.py`, and the docs. Not yet committed.
+**Next action:** commit this batch (model-default corrections + the live-verification log entry),
+then start **P3 — Tools & Booking Simulation**: `app/services/booking.py`, `app/services/crm.py`,
+`app/agent/tools.py` (five schemas per `Architecture.md` §5, adapted to Gemini's `function_
+declarations` shape per rules.md A5–A8), then wire dispatch into `orchestrator.py` (replace the
+`TODO(P3)` stub).
 
 > Exactly one entry belongs here at any time. Replace it, do not append.
 

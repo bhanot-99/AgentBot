@@ -88,10 +88,15 @@ being written (not assumed) — see D13 in `memory.md` for how. Several concepts
 the Anthropic SDK v1 used; the differences are called out explicitly, not papered over.
 
 **A1 — Model IDs come from config, never hardcoded in business logic.** Set via `config.py` and
-overridable via `CHAT_MODEL` / `ANALYTICS_MODEL`. Defaults (`gemini-2.5-flash` chat,
-`gemini-2.5-pro` analytics) were current as of this project's knowledge cutoff — **verify current
-availability in Google AI Studio before relying on them**; Gemini model names move faster than
-this document.
+overridable via `CHAT_MODEL` / `ANALYTICS_MODEL`. Default for both is `gemini-3.6-flash`, verified
+live against the real API on 2026-08-24 — `gemini-2.5-flash`/`gemini-2.5-pro` (this project's first
+guess, based on knowledge-cutoff assumptions) turned out to be retired/unavailable and zero-quota
+respectively on the test account; the API's own error message named `gemini-3.6-flash` as the
+replacement. Both model settings point at the same flash-tier model only because this account's
+free tier has **zero quota** for any `pro`-tier model (confirmed live, not assumed) — a paid tier
+could restore the original flash/pro split for `ANALYTICS_MODEL` via `.env`, no code change needed.
+Re-verify current availability in Google AI Studio before relying on any of this; Gemini model
+names move faster than this document.
 
 **A2 — Reasoning depth via `GenerateContentConfig.thinking_config.thinking_level`:** `"low"` for
 chat turns, `"medium"` for analytics extraction. Not a raw token budget.

@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     # `GEMINI_API_KEY=` (present but empty), which a bare `str` field accepts silently —
     # defeating the whole point of the fail-fast check below. Caught live, not by inspection.
     gemini_api_key: str = Field(min_length=1)
-    chat_model: str = "gemini-2.5-flash"
-    analytics_model: str = "gemini-2.5-pro"
+    chat_model: str = "gemini-3.6-flash"
+    analytics_model: str = "gemini-3.6-flash"
     session_ttl_minutes: int = 120
     force_booking_failure: str = ""
     log_level: str = "INFO"

@@ -46,7 +46,7 @@ which is why it sits off the spine.
 
 **Tasks**
 1. `git init`, **`.gitignore` in the first commit** (`.env`, `__pycache__`, `.venv`, `*.log`, `.DS_Store`) — rule G1.
-2. `.env.example`: `GEMINI_API_KEY=`, `CHAT_MODEL=gemini-2.5-flash`, `ANALYTICS_MODEL=gemini-2.5-pro`, `SESSION_TTL_MINUTES=120`, `FORCE_BOOKING_FAILURE=`, `LOG_LEVEL=INFO`, `ALLOWED_ORIGINS=`.
+2. `.env.example`: `GEMINI_API_KEY=`, `CHAT_MODEL=gemini-3.6-flash`, `ANALYTICS_MODEL=gemini-3.6-flash`, `SESSION_TTL_MINUTES=120`, `FORCE_BOOKING_FAILURE=`, `LOG_LEVEL=INFO`, `ALLOWED_ORIGINS=`.
 3. `requirements.txt` — the six production deps + pytest, pytest-asyncio, ruff.
 4. Full directory tree per `Architecture.md` §6, with `__init__.py` files.
 5. `app/config.py` — pydantic-settings `Settings`; **fail fast at startup** with a named error when `GEMINI_API_KEY` is absent.

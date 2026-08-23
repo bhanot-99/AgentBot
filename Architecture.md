@@ -57,7 +57,7 @@
 │   LLMClient    (Protocol) ──▶ GeminiClient           [provider-swappable] │
 └────────────────────────────────┼──────────────────────────────────────────┘
                                  ▼
-                        Gemini API — gemini-2.5-flash / gemini-2.5-pro
+                        Gemini API — gemini-3.6-flash
 ```
 
 **Why layered this way:** the Forward Deployed Engineer reality is that a customer will want to
@@ -356,17 +356,17 @@ AgentBot/
 
 | Setting | Value | Rationale |
 |---|---|---|
-| `CHAT_MODEL` | `gemini-2.5-flash` | Fast, cheap, strong instruction-following for conversational turns; verify current availability before relying on this default (rules.md A1) |
+| `CHAT_MODEL` | `gemini-3.6-flash` | Verified live 2026-08-24 against the real API — the first-guess default (`gemini-2.5-flash`) turned out retired for new accounts; the API's own error named this replacement |
 | Chat `thinking_config.thinking_level` | `low` | Conversational turns need speed, not deliberation |
 | `max_output_tokens` (chat) | `1024` | Turns are capped at 60 words. Deliberately short output |
-| `ANALYTICS_MODEL` | `gemini-2.5-pro` | Higher-capability model; extraction quality matters more than cost on one call per session |
+| `ANALYTICS_MODEL` | `gemini-3.6-flash` | Same model as chat, **not by design** — the test account's free tier has zero quota for any `pro`-tier model (confirmed live). A paid tier can restore a stronger analytics model via `.env` alone |
 | Analytics `thinking_config.thinking_level` | `medium` | Structured extraction over a full transcript benefits from more deliberation than a chat turn |
 | `max_output_tokens` (analytics) | `4096` | Full structured record |
 | Timeout | 30 s chat / 60 s analytics, via `http_options.timeout` (ms) | Bounded turn latency; the SDK has no chat-appropriate default |
 | Retries | explicit `http_options.retry_options=HttpRetryOptions(attempts=3)` | `google-genai` does not retry by default, unlike the Anthropic SDK used previously — this must be set, not assumed |
 
-Both model IDs are environment variables. A customer who wants a cheaper or faster tier changes
-`.env`, not code.
+Both model IDs are environment variables. A customer who wants a cheaper or faster tier — or who
+has billing that unlocks `pro`-tier quota — changes `.env`, not code.
 
 **Explicitly not used in v1:** `temperature`/`top_p`/`top_k` (thinking level is the tuning lever
 instead), streaming (deferred), explicit context caching (rules.md A15 — a documented
