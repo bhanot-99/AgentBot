@@ -349,21 +349,29 @@ request log (two real `POST /api/chat` hits) before concluding it wasn't a serve
 Hinglish, both directions · ✅ Tier 1 tests pass with no API key · N/A `cache_read_input_tokens > 0`
 (superseded by the A15 no-caching-in-v1 decision, itself already verified reading exactly 0).
 
+### 2026-08-24 · 03:55 IST — Branch restructuring
+
+At the user's request, moved off phase-number branch names. `p0-p4` (P0–P2 work: scaffolding,
+prompt system, agent core/chat API — the "P0–P4" name was aspirational from before P3/P4 existed)
+renamed to **`agent-chat-core`**. Created **`booking-tools-ui`** off it for Phase 3 (Tools &
+Booking Simulation) and Phase 4 (Web Interface) — the two phases this session was about to start.
+`main` still holds only the root `.gitignore` commit (rule G1), untouched.
+
+**For a future session:** work continues on `booking-tools-ui`. `agent-chat-core` is the merge
+target once P3–P4 are done, the same role `p0-p4` was filling before the rename.
+
 ---
 
 ## 3. Currently Working On
 
 **File:** *none — between phases*
-**Phase:** P2 gate genuinely passed — live-verified against the real Gemini API with the user's
-own key (10-turn memory, EN/Hindi/Hinglish mirroring, anti-hallucination on a discount request,
-voice number verbalisation). Model defaults corrected from guessed (`gemini-2.5-flash/pro`) to
-verified-working (`gemini-3.6-flash` for both, since this account's free tier has zero `pro`
-quota) across `.env`, `.env.example`, `app/config.py`, and the docs. Not yet committed.
-**Next action:** commit this batch (model-default corrections + the live-verification log entry),
-then start **P3 — Tools & Booking Simulation**: `app/services/booking.py`, `app/services/crm.py`,
-`app/agent/tools.py` (five schemas per `Architecture.md` §5, adapted to Gemini's `function_
-declarations` shape per rules.md A5–A8), then wire dispatch into `orchestrator.py` (replace the
-`TODO(P3)` stub).
+**Phase:** P2 gate passed and committed. Now on branch `booking-tools-ui` (off `agent-chat-core`,
+which holds the completed P0–P2 work — see the branch-restructuring entry above), ready to start
+P3.
+**Next action:** **P3 — Tools & Booking Simulation**: `app/services/booking.py`,
+`app/services/crm.py`, `app/agent/tools.py` (five schemas per `Architecture.md` §5, adapted to
+Gemini's `function_declarations` shape per rules.md A5–A8), then wire dispatch into
+`orchestrator.py` (replace the `TODO(P3)` stub).
 
 > Exactly one entry belongs here at any time. Replace it, do not append.
 
