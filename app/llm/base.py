@@ -1,6 +1,6 @@
 from typing import Any, Protocol, TypeVar
 
-from google.genai.types import GenerateContentResponse
+from google.genai.types import GenerateContentResponse, Tool
 from pydantic import BaseModel
 
 T = TypeVar("T", bound=BaseModel)
@@ -14,7 +14,7 @@ class LLMClient(Protocol):
         *,
         system: str,
         messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
+        tools: list[Tool] | None = None,
     ) -> GenerateContentResponse: ...
 
     async def parse(

@@ -1,14 +1,17 @@
 import logging
 from datetime import UTC, datetime
 
+from google.genai import types
+
+from app.agent.tools import TOOLS, ToolDispatcher
 from app.llm.base import LLMClient
 from app.models import LeadProfile, Session, Usage
 
 logger = logging.getLogger(__name__)
 
-# The realistic maximum without tools is one call; once Phase 3 wires tool dispatch, a
-# cooperative turn is update_lead_profile -> check_slot_availability -> book_site_visit ->
-# final text. A fifth iteration means the model is stuck (Architecture.md §3.2).
+# The realistic maximum turn is update_lead_profile -> check_slot_availability ->
+# book_site_visit -> final text. A fifth iteration means the model is stuck
+# (Architecture.md §3.2).
 MAX_ITERATIONS = 4
 
 _GRACEFUL_CLOSE_TEXT = (
@@ -16,11 +19,14 @@ _GRACEFUL_CLOSE_TEXT = (
     "with you directly. Thanks for your time!"
 )
 
+_ZERO_USAGE = Usage(input_tokens=0, cache_read_input_tokens=0, output_tokens=0)
+
 
 class Orchestrator:
-    def __init__(self, llm: LLMClient, system_prompt: str) -> None:
+    def __init__(self, llm: LLMClient, system_prompt: str, dispatcher: ToolDispatcher) -> None:
         self._llm = llm
         self._system_prompt = system_prompt
+        self._dispatcher = dispatcher
 
     async def run_turn(self, session: Session) -> tuple[str, Usage]:
         """Runs the agent loop for one already-appended user turn (Architecture.md §3.2, step 5).
@@ -32,9 +38,12 @@ class Orchestrator:
         # per-turn state are just one system_instruction string — there is no cache boundary
         # to keep them either side of.
         system = f"{self._system_prompt}\n\n---\n\n{_live_state_block(session.lead)}"
+        usage = _ZERO_USAGE
 
         for _ in range(MAX_ITERATIONS):
-            response = await self._llm.complete(system=system, messages=session.messages)
+            response = await self._llm.complete(
+                system=system, messages=session.messages, tools=[TOOLS]
+            )
             candidate = response.candidates[0]
             session.messages.append(
                 {"role": "model", "parts": [part.model_dump() for part in candidate.content.parts]}
@@ -46,22 +55,26 @@ class Orchestrator:
                 output_tokens=usage_metadata.candidates_token_count or 0,
             )
 
-            has_tool_call = any(part.function_call for part in candidate.content.parts)
-            if has_tool_call:
-                # TODO(P3): dispatch every function_call part, append function_response
-                # parts in one user Content, and loop. No tools are registered yet, so this
-                # model turn has nothing to call and the honest response is a graceful
-                # close, not a retry.
-                logger.warning("model requested a tool call with no tool dispatch configured")
-                return _GRACEFUL_CLOSE_TEXT, usage
+            # A tool call is a function_call Part, not a distinct finish_reason (rules.md A6).
+            calls = [part.function_call for part in candidate.content.parts if part.function_call]
+            if not calls:
+                return (response.text or "").strip(), usage
 
-            return (response.text or "").strip(), usage
+            # All results for this turn go back as function_response Parts inside a single
+            # following user-role Content (rules.md A7) — never split across messages.
+            response_parts = []
+            for call in calls:
+                output = self._dispatcher.dispatch(call.name, dict(call.args or {}), session)
+                function_response = types.FunctionResponse(
+                    id=call.id, name=call.name, response=output
+                )
+                response_parts.append(types.Part(function_response=function_response).model_dump())
+            session.messages.append({"role": "user", "parts": response_parts})
 
-        # Unreachable while no tools are registered (every call above returns immediately),
-        # kept so the shape matches Architecture.md §3.2.d ahead of Phase 3's tool loop.
-        return _GRACEFUL_CLOSE_TEXT, Usage(
-            input_tokens=0, cache_read_input_tokens=0, output_tokens=0
-        )
+        # Iteration cap reached: the model is stuck. Force a graceful close and flag the
+        # session for escalation rather than looping forever (Architecture.md §3.2.d).
+        self._dispatcher.force_escalation(session, reason="iteration_cap_reached")
+        return _GRACEFUL_CLOSE_TEXT, usage
 
 
 def _live_state_block(lead: LeadProfile) -> str:

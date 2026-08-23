@@ -1,1 +1,852 @@
-/* Design tokens from design.md */
+/* Design tokens from design.md §7 (paste-ready block), extended with the components in §5. */
+
+:root {
+  /* colour — light (design.md §2.1) */
+  --bg: #FAF8F5;
+  --surface: #FFFFFF;
+  --surface-alt: #F2EEE8;
+  --surface-sunken: #EBE5DC;
+  --border: #E3DCD2;
+  --border-strong: #C9BFB1;
+  --ink: #14213D;
+  --text-muted: #5A6478;
+  --text-subtle: #8A93A6;
+  --on-ink: #F7F9FC;
+  --brand: #C8952E;
+  --brand-hover: #B08123;
+  --brand-text: #8A6314;
+  --brand-soft: #FBF1DC;
+  --on-brand: #14213D;
+  --success: #1B7F5A;
+  --success-soft: #E4F4EC;
+  --warning: #B4690E;
+  --warning-soft: #FDF0DC;
+  --danger: #B3261E;
+  --danger-soft: #FBE9E7;
+  --info: #0E6C86;
+  --info-soft: #E1F1F6;
+  --bubble-user-bg: var(--ink);
+  --bubble-user-fg: var(--on-ink);
+
+  /* type */
+  --font-sans: "Plus Jakarta Sans", "Noto Sans Devanagari", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --fs-display: 2.75rem;
+  --fs-h1: 2.125rem;
+  --fs-h2: 1.6875rem;
+  --fs-h3: 1.375rem;
+  --fs-h4: 1.125rem;
+  --fs-body-lg: 1.125rem;
+  --fs-body: 1rem;
+  --fs-body-sm: 0.875rem;
+  --fs-caption: 0.8125rem;
+  --fs-overline: 0.75rem;
+  --fs-mono: 0.8125rem;
+  --lh-tight: 1.15;
+  --lh-snug: 1.3;
+  --lh-normal: 1.6;
+  --lh-deva: 1.75;
+
+  /* space, radius, elevation, motion */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --r-pill: 999px;
+  --sh-sm: 0 1px 2px rgba(20, 33, 61, 0.06);
+  --sh-md: 0 2px 8px rgba(20, 33, 61, 0.08);
+  --sh-lg: 0 8px 24px rgba(20, 33, 61, 0.1);
+  --dur-instant: 100ms;
+  --dur-fast: 160ms;
+  --dur-base: 220ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
+  --measure: 34rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0B111F;
+    --surface: #121B2C;
+    --surface-alt: #1A2437;
+    --surface-sunken: #080D18;
+    --border: #27324A;
+    --border-strong: #3A4762;
+    --ink: #ECF1F8;
+    --text-muted: #A3AFC4;
+    --text-subtle: #74819A;
+    --on-ink: #0B111F;
+    --brand: #E0B45C;
+    --brand-hover: #EFC876;
+    --brand-text: #E0B45C;
+    --brand-soft: #2A2415;
+    --on-brand: #14213D;
+    --success: #4CC38A;
+    --success-soft: #122A21;
+    --warning: #E0A458;
+    --warning-soft: #2B2113;
+    --danger: #F2776C;
+    --danger-soft: #2E1614;
+    --info: #5CB4CE;
+    --info-soft: #122430;
+    --bubble-user-bg: var(--surface-alt);
+    --bubble-user-fg: var(--ink);
+    --sh-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+    --sh-md: 0 2px 8px rgba(0, 0, 0, 0.45);
+    --sh-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0B111F;
+  --surface: #121B2C;
+  --surface-alt: #1A2437;
+  --surface-sunken: #080D18;
+  --border: #27324A;
+  --border-strong: #3A4762;
+  --ink: #ECF1F8;
+  --text-muted: #A3AFC4;
+  --text-subtle: #74819A;
+  --on-ink: #0B111F;
+  --brand: #E0B45C;
+  --brand-hover: #EFC876;
+  --brand-text: #E0B45C;
+  --brand-soft: #2A2415;
+  --on-brand: #14213D;
+  --success: #4CC38A;
+  --success-soft: #122A21;
+  --warning: #E0A458;
+  --warning-soft: #2B2113;
+  --danger: #F2776C;
+  --danger-soft: #2E1614;
+  --info: #5CB4CE;
+  --info-soft: #122430;
+  --bubble-user-bg: var(--surface-alt);
+  --bubble-user-fg: var(--ink);
+  --sh-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --sh-md: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --sh-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+:lang(hi) {
+  line-height: var(--lh-deva);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Reset + base                                                            */
+/* ---------------------------------------------------------------------- */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 360px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-normal);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.icon {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+}
+
+/* ---------------------------------------------------------------------- */
+/* App shell (design.md §5.1)                                             */
+/* ---------------------------------------------------------------------- */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.app-main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr;
+  min-height: 0;
+}
+
+@media (min-width: 1024px) {
+  .app-main {
+    grid-template-columns: 1fr 380px;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header (design.md §5.2)                                                */
+/* ---------------------------------------------------------------------- */
+
+.app-header {
+  height: 64px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-5);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.app-header__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.app-header__mark {
+  width: 22px;
+  height: 22px;
+  color: var(--brand);
+  flex: 0 0 auto;
+}
+
+.app-header__title-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.app-header__title {
+  font-size: var(--fs-h4);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-header__subtitle {
+  font-size: var(--fs-caption);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.app-header__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: 0 0 auto;
+}
+
+/* Below 420px the brand and controls no longer fit on one 64px row without truncating the
+   title (design.md still requires 44px touch targets at this width) — wrap to two rows instead
+   of shrinking either group. */
+@media (max-width: 420px) {
+  .app-header {
+    height: auto;
+    flex-wrap: wrap;
+    padding: var(--sp-2) var(--sp-3);
+    row-gap: var(--sp-2);
+  }
+
+  .app-header__brand {
+    flex: 1 1 100%;
+  }
+
+  .app-header__controls {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+}
+
+.icon-button {
+  /* design.md §6: touch targets >= 44x44, including the theme and channel toggles. */
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-pill);
+  color: var(--ink);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.icon-button:hover {
+  background: var(--surface-alt);
+}
+
+.icon--moon {
+  display: none;
+}
+
+:root[data-theme="dark"] .icon--sun {
+  display: none;
+}
+
+:root[data-theme="dark"] .icon--moon {
+  display: block;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon--sun {
+    display: none;
+  }
+  :root:not([data-theme="light"]) .icon--moon {
+    display: block;
+  }
+}
+
+.rail-toggle {
+  display: inline-flex;
+}
+
+.rail-toggle .icon {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.rail-toggle[aria-expanded="true"] .icon {
+  transform: rotate(90deg);
+}
+
+@media (min-width: 1024px) {
+  .rail-toggle {
+    display: none;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Channel toggle (design.md §5.6)                                        */
+/* ---------------------------------------------------------------------- */
+
+.channel-toggle {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--r-pill);
+  background: var(--surface-alt);
+  gap: 2px;
+}
+
+.channel-toggle__option {
+  /* design.md §6: touch targets >= 44x44, including the channel toggle. */
+  min-height: 44px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-body-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.channel-toggle__option[aria-checked="true"] {
+  background: var(--brand);
+  color: var(--on-brand);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Banners (voice mode notice)                                            */
+/* ---------------------------------------------------------------------- */
+
+.banner {
+  padding: var(--sp-2) var(--sp-5);
+  font-size: var(--fs-body-sm);
+  border-bottom: 1px solid var(--border);
+}
+
+.banner--info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Conversation column                                                     */
+/* ---------------------------------------------------------------------- */
+
+.conversation {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+@media (max-width: 1023.98px) {
+  .conversation {
+    border-right: none;
+  }
+}
+
+.message-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-6) var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.empty-state {
+  margin: auto;
+  text-align: center;
+  max-width: 24rem;
+}
+
+.empty-state__mark {
+  width: 40px;
+  height: 40px;
+  color: var(--ink);
+  opacity: 0.2;
+  margin: 0 auto var(--sp-4);
+}
+
+.empty-state__title {
+  font-size: var(--fs-h3);
+  font-weight: 600;
+  margin: 0 0 var(--sp-2);
+}
+
+.empty-state__hint {
+  font-size: var(--fs-body-sm);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Message bubbles (design.md §5.3)                                       */
+/* ---------------------------------------------------------------------- */
+
+.message-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.message-row--agent {
+  align-items: flex-start;
+}
+
+.message-row--customer {
+  align-items: flex-end;
+}
+
+.bubble {
+  max-width: var(--measure);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-lg);
+  font-size: var(--fs-body);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  animation: bubble-enter var(--dur-base) var(--ease-spring);
+}
+
+@keyframes bubble-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bubble--agent {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand);
+  border-bottom-left-radius: 4px;
+}
+
+.bubble--customer {
+  background: var(--bubble-user-bg);
+  color: var(--bubble-user-fg);
+  border-bottom-right-radius: 4px;
+}
+
+.bubble--voice {
+  font-size: var(--fs-body-lg);
+}
+
+.message-timestamp {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-caption);
+  color: var(--text-subtle);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Typing indicator (design.md §5.4)                                      */
+/* ---------------------------------------------------------------------- */
+
+.typing-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-lg);
+  border-bottom-left-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand);
+}
+
+.typing-bubble__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-subtle);
+  animation: typing-dot 1.2s infinite ease-in-out;
+}
+
+.typing-bubble__dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-bubble__dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.typing-bubble__label {
+  display: none;
+  font-size: var(--fs-body-sm);
+  color: var(--text-muted);
+}
+
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-bubble__dot {
+    display: none;
+  }
+  .typing-bubble__label {
+    display: inline;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Composer (design.md §5.5)                                              */
+/* ---------------------------------------------------------------------- */
+
+.composer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  margin: 0 var(--sp-5) var(--sp-3);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-sm);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.composer:focus-within {
+  border-color: var(--brand);
+}
+
+.composer__input {
+  flex: 1;
+  resize: none;
+  border: none;
+  background: transparent;
+  /* An explicit starting height, not just min-height, is required — otherwise a wrapped
+     placeholder (long text on a narrow composer) grows the box before any input event ever
+     fires to let autoGrowComposer() take over. */
+  height: 24px;
+  min-height: 24px;
+  max-height: 120px;
+  padding: var(--sp-2) 0;
+  font-size: var(--fs-body);
+  line-height: var(--lh-normal);
+  overflow: hidden;
+}
+
+.composer__input:focus {
+  outline: none;
+}
+
+.composer__input::placeholder {
+  color: var(--text-subtle);
+}
+
+.composer__send {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-pill);
+  background: var(--brand);
+  color: var(--on-brand);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+
+.composer__send:hover:not(:disabled) {
+  background: var(--brand-hover);
+}
+
+.composer__send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.conversation__footer {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 var(--sp-5) var(--sp-4);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Buttons (design.md §5.9)                                               */
+/* ---------------------------------------------------------------------- */
+
+.btn {
+  min-height: 44px;
+  padding: 0 var(--sp-5);
+  border-radius: var(--r-md);
+  font-size: var(--fs-body-sm);
+  font-weight: 600;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.btn--danger {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--on-ink);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Insight rail (mobile bottom sheet / desktop column)                    */
+/* ---------------------------------------------------------------------- */
+
+.insight-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  padding: var(--sp-5);
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+@media (max-width: 1023.98px) {
+  .insight-rail {
+    position: fixed;
+    inset: auto 0 0 0;
+    max-height: 70vh;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    border-radius: var(--r-xl) var(--r-xl) 0 0;
+    box-shadow: var(--sh-lg);
+    transform: translateY(100%);
+    transition: transform var(--dur-base) var(--ease-out);
+    z-index: 20;
+  }
+
+  .insight-rail.is-open {
+    transform: translateY(0);
+  }
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: var(--sp-4);
+}
+
+.panel__title {
+  font-size: var(--fs-h4);
+  font-weight: 600;
+  margin: 0 0 var(--sp-3);
+}
+
+.panel__hint {
+  font-size: var(--fs-body-sm);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Tool-event trace (design.md §5.7)                                      */
+/* ---------------------------------------------------------------------- */
+
+.tool-trace {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.tool-trace-row {
+  background: var(--surface-sunken);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  overflow: hidden;
+}
+
+.tool-trace-row__summary {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+}
+
+.tool-trace-row__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.tool-trace-row__dot--ok {
+  background: var(--success);
+}
+
+.tool-trace-row__dot--failed {
+  background: var(--danger);
+}
+
+.tool-trace-row__name {
+  flex: 1;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-trace-row__latency {
+  color: var(--text-muted);
+}
+
+.tool-trace-row__status {
+  font-weight: 500;
+}
+
+.tool-trace-row__status--ok {
+  color: var(--success);
+}
+
+.tool-trace-row__status--failed {
+  color: var(--danger);
+}
+
+.tool-trace-row__detail {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Analytics stub panel                                                    */
+/* ---------------------------------------------------------------------- */
+
+.analytics-json {
+  margin: 0;
+  padding: var(--sp-3);
+  background: var(--surface-sunken);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Toasts (design.md §5.9)                                                */
+/* ---------------------------------------------------------------------- */
+
+.toast-stack {
+  position: fixed;
+  top: var(--sp-5);
+  right: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  z-index: 50;
+  max-width: calc(100vw - var(--sp-8));
+}
+
+.toast {
+  background: var(--danger-soft);
+  border-left: 3px solid var(--danger);
+  color: var(--ink);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md);
+  box-shadow: var(--sh-md);
+  font-size: var(--fs-body-sm);
+  max-width: 22rem;
+  animation: bubble-enter var(--dur-base) var(--ease-out);
+}

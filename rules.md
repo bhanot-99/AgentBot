@@ -109,19 +109,25 @@ this project's tuning lever, not sampling parameters.
 instance of the Pydantic model). Never hand-roll JSON parsing of `response.text`.
 
 **A5 — Tools are declared as `types.Tool(function_declarations=[...])`**, each with an explicit
-`required` list in its parameter schema. *(Phase 3 — no tools exist yet.)*
+`required` list in its parameter schema. There is **no** Gemini equivalent of OpenAI/Anthropic's
+`strict: true` / `additionalProperties: false` — the live API rejects an `additional_properties`
+field on a tool parameter `Schema` with `400 INVALID_ARGUMENT` ("Unknown name
+additional_properties ... Cannot find field"), even though the SDK's local `Schema` type accepts
+the field without complaint. Caught live during Phase 3, not by inspection — the SDK-side type
+being permissive is not proof the wire API accepts it. `required` is the only closed-schema guard
+actually available.
 
 **A6 — A tool call is detected by a `function_call` Part in `candidate.content.parts`, not by a
 distinct `finish_reason`.** Unlike some APIs, a successful function call normally still reports
-`finish_reason == "STOP"` — check the parts, not just the finish reason. *(Phase 3.)*
+`finish_reason == "STOP"` — check the parts, not just the finish reason. *(Phase 3 — verified live 2026-08-24.)*
 
 **A7 — All tool results for one model turn go back as `function_response` Parts inside a single
 following `user`-role `Content`.** Splitting them across messages silently trains the model out of
-parallel tool use. *(Phase 3.)*
+parallel tool use. *(Phase 3 — verified live 2026-08-24.)*
 
 **A8 — Failed tools are recorded with an explicit error flag and a recovery hint** in the
 `function_response` payload — never a dropped result, never a raised exception that kills the
-turn. *(Phase 3.)*
+turn. *(Phase 3 — verified live 2026-08-24.)*
 
 **A9 — Conversation history stores Gemini `Content` blocks verbatim**
 (`role: "user"` / `"model"`, `parts: [...]`). Append the response's own content, not an extracted

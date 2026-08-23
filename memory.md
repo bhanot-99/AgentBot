@@ -3,10 +3,10 @@
 **This is the live state tracker. It is the first file to read when picking work up, and the last
 file to write before putting work down.**
 
-**Last updated:** 2026-08-24 03:40 IST
-**Current phase:** P2 — Agent Core & Chat API (gate passed, verified live against real Gemini)
-**Overall status:** P0–P2 complete and live-verified · P3 not begun
-**Elapsed:** ~8.5 h of 24 h · **Remaining:** ~15.5 h
+**Last updated:** 2026-08-24 07:30 IST
+**Current phase:** P4 — Web Interface (gate passed, browser-verified via headless Chrome + CDP)
+**Overall status:** P0–P4 complete and live-verified · P5 not begun
+**Elapsed:** ~13.0 h of 24 h · **Remaining:** ~11.0 h
 
 ---
 
@@ -36,8 +36,8 @@ Update rules:
 | P0 | Foundation & Scaffolding | 1.0 h | Gate passed | 2026-08-24 |
 | P1 | Knowledge Base & Prompt v1 | 3.0 h | Gate passed | 2026-08-24 |
 | P2 | Agent Core & Chat API | 2.5 h | Gate passed | 2026-08-24 |
-| P3 | Tools & Booking Simulation | 2.0 h | Not started | — |
-| P4 | Web Interface | 2.5 h | Not started | — |
+| P3 | Tools & Booking Simulation | 2.0 h | Gate passed | 2026-08-24 |
+| P4 | Web Interface | 2.5 h | Gate passed | 2026-08-24 |
 | P5 | Analytics Engine | 2.0 h | Not started | — |
 | P6 | Test Harness & Scenarios | 2.5 h | Not started | — |
 | P7 | Prompt Hardening | 3.0 h | Not started | — |
@@ -51,19 +51,19 @@ Status values: `Not started` · `In progress` · `Gate passed` · `Blocked` · `
 |---|---|---|---|
 | F-01 | Natural sales conversation | P1, P2 | Verified live — short turns, one question/turn over 10 real turns |
 | F-02 | Multilingual & code-switching | P1, P7 | Verified live — EN/Hindi/Hinglish, mid-conversation switches both ways; hardening (P7) still ahead |
-| F-03 | Lead qualification (BANTL) | P1, P3 | Conversational behaviour verified live (budget/purpose/timeline surfaced naturally); structured extraction needs the P3 tool |
+| F-03 | Lead qualification (BANTL) | P1, P3 | **Verified live** — `update_lead_profile` correctly slot-filled name/phone/budget/configuration/purpose from one message |
 | F-04 | Conversation memory | P2 | **Verified live** — recalled a fact from 9 turns earlier, no re-ask |
 | F-05 | Grounded answers / anti-hallucination | P1, P7 | **Verified live** — refused a direct discount request per the deflection pattern; hardening (P7) still ahead |
 | F-06 | Objection handling | P1, P7 | Prompt written (P1) — not yet exercised live; hardening is P7 |
 | F-07 | Busy / uninterested / call-later | P1 | Verified live — "let me think" handled gracefully, no re-pitch |
-| F-08 | Do-not-contact compliance | P1, P3 | Prompt written (P1) — code short-circuit is P3 |
-| F-09 | Site-visit booking | P3 | Not started |
-| F-10 | Booking-failure recovery | P3, P7 | Not started |
-| F-11 | Human escalation | P3 | Not started |
+| F-08 | Do-not-contact compliance | P1, P3 | **Verified live** — `set_contact_preference(do_not_contact)` fired on request, stage flipped to `DO_NOT_CONTACT`, and a follow-up message confirmed **zero** further LLM calls (log-verified) even when the customer tried re-engaging |
+| F-09 | Site-visit booking | P3 | **Verified live** — real conversation produced a confirmed booking with a real reference and `stage: CONFIRMED` |
+| F-10 | Booking-failure recovery | P3, P7 | **Verified live** — `slot_unavailable` produced a graceful recovery offering the two real alternative slots, no false confirmation, `stage` stayed `BOOKING`; the other three modes remain unit-tested only; hardening is P7 |
+| F-11 | Human escalation | P3 | Implemented and unit-tested (model-invoked and iteration-cap-forced); not yet exercised live |
 | F-12 | Proper conversation ending | P1 | Prompt written (P1) — not yet exercised live |
 | F-13 | Channel duality (chat / voice) | P1, P7 | Verified live on both channels — voice number verbalisation and word cap confirmed; hardening (P7) still ahead |
 | F-14 | Post-conversation analytics | P5 | Not started |
-| F-15 | Web chat interface | P4 | Not started |
+| F-15 | Web chat interface | P4 | **Verified live in a real browser** — full conversation completes, tool trace and Devanagari confirmed, dark mode and 360px confirmed |
 | F-16 | Test evidence | P6 | Not started |
 
 ---
@@ -349,21 +349,193 @@ request log (two real `POST /api/chat` hits) before concluding it wasn't a serve
 Hinglish, both directions · ✅ Tier 1 tests pass with no API key · N/A `cache_read_input_tokens > 0`
 (superseded by the A15 no-caching-in-v1 decision, itself already verified reading exactly 0).
 
+### 2026-08-24 · 03:55 IST — Branch restructuring
+
+At the user's request, moved off phase-number branch names. `p0-p4` (P0–P2 work: scaffolding,
+prompt system, agent core/chat API — the "P0–P4" name was aspirational from before P3/P4 existed)
+renamed to **`agent-chat-core`**. Created **`booking-tools-ui`** off it for Phase 3 (Tools &
+Booking Simulation) and Phase 4 (Web Interface) — the two phases this session was about to start.
+`main` still holds only the root `.gitignore` commit (rule G1), untouched.
+
+**For a future session:** work continues on `booking-tools-ui`. `agent-chat-core` is the merge
+target once P3–P4 are done, the same role `p0-p4` was filling before the rename.
+
+### 2026-08-24 · 05:10 IST — Phase 3 gate passed: tools wired, dispatched, and live-verified
+
+Picked up exactly where the prior session's uncommitted work left off (laptop shutdown mid-phase,
+no work lost — `app/services/booking.py` and the `BookingResult` model were already complete and
+uncommitted; `app/services/crm.py` had escalation + DNC register already). Completed the rest of
+P3:
+
+`app/agent/tools.py` (new): the five `types.Tool(function_declarations=[...])` schemas (rules.md
+A5) and `ToolDispatcher` — a handler per tool, session-state side effects (`update_lead_profile`
+merges into `LeadProfile` and optionally advances `Stage`; `book_site_visit` sets `CONFIRMED` on
+success and attaches a conversational recovery hint per failure `error_code` on failure;
+`escalate_to_human` sets `ESCALATED`; `set_contact_preference` sets `DO_NOT_CONTACT`/
+`CALLBACK_SCHEDULED` and registers the phone with the CRM's DNC set), `ToolEvent` recording on
+every call, and a try/except boundary so a malformed or unknown tool name never raises out of
+`dispatch` and kills the turn (rules.md A8).
+
+`app/agent/orchestrator.py`: replaced the Phase-2 graceful-close stub with the real loop —
+detects tool calls via `function_call` Parts (A6, not `finish_reason`), dispatches every call in
+one model turn and returns all results as `function_response` Parts inside a single following
+`user`-role `Content` (A7), and on hitting `MAX_ITERATIONS` forces a graceful close **and** an
+escalation ticket (`ToolDispatcher.force_escalation`) rather than just stopping silently
+(Architecture.md §3.2.d — this half of the cap behaviour was previously undocumented in code).
+
+`app/api/chat.py`: DNC short-circuit added before the orchestrator call — once
+`contact_preference == DO_NOT_CONTACT`, the turn returns a fixed acknowledgement with **zero**
+LLM calls, verified by asserting `len(fake_llm.calls) == 0` in a new API test.
+
+`app/main.py`: `BookingService`/`CrmService` now constructed once at startup and shared via
+`app.state`, per crm.py's own docstring ("the DNC register must outlive any single conversation").
+
+**A real bug in the existing (pre-shutdown) code found and fixed, not by inspection but by a live
+call:** `app/llm/gemini_client.py`'s `complete()` accepted a `tools` parameter but never passed it
+into `GenerateContentConfig` — tool declarations would have silently never reached the model.
+Fixed by adding `tools=tools` to the config; also corrected the `LLMClient` Protocol's `tools`
+type from a generic `list[dict]` to the real `list[types.Tool]` (rules.md A5), since this seam
+already leaks Gemini-specific types by design (D13).
+
+**A second real bug found by a live call, not inspection:** the tool schemas were first written
+with `additional_properties=False` on every top-level parameter `Schema` — the SDK's local
+Pydantic model accepts this field silently, but the live Gemini API rejected every request with
+`400 INVALID_ARGUMENT`, "Unknown name additional_properties ... Cannot find field." There is no
+Gemini equivalent of OpenAI/Anthropic's `strict`/`additionalProperties` guard; `required` is the
+only closed-schema tool available. Fixed by removing the field from all five schemas, and
+corrected the same wrong assumption in `Architecture.md` §5 and `rules.md` A5 before it could
+mislead a future session — the original §5 draft ("Each is `strict: true` with
+`additionalProperties: false`") predated the D13 Gemini swap and was never updated for it.
+
+**Verified live via a real conversation against the running app and the real API, not just
+`pytest`:** sent one message with name, phone, budget, configuration, purpose, and a booking
+request in a single turn. The model correctly called `update_lead_profile` →
+`book_site_visit` → `update_lead_profile(stage=CONFIRMED)` inside one turn (three tool calls,
+one user-facing reply), returned a real reference (`NS-0FDF5C89`), and the reply correctly stated
+the date/slot/reference in English. `session.stage` read back as `CONFIRMED` and the lead profile
+was fully populated from one message — the memory.md entry from the pre-tool Phase-2 session had
+noted this exact gap ("`lead_profile` and `stage` stayed empty ... `update_lead_profile` isn't
+wired as a tool yet"); it is now closed.
+
+**Not verified live, by resource limit, not by omission:** the four booking failure modes and the
+DNC short-circuit's live behaviour. A second live conversation hit
+`RESOURCE_EXHAUSTED` — the Gemini free tier's **daily** cap of 20 `generate_content` requests for
+`gemini-3.6-flash` (distinct from the earlier per-minute rate limit; confirmed from the error body
+directly, not assumed) was exhausted by this session's own testing. Every failure mode and the DNC
+short-circuit's "zero LLM calls" behaviour are deterministically covered by `FakeLLMClient`-backed
+unit tests instead (`tests/test_booking.py`, `tests/test_orchestrator.py`,
+`tests/test_api.py::test_chat_short_circuits_with_no_llm_call_once_do_not_contact`), and all 46
+tests pass with no API key set (rule T1). **For the next session:** re-run one failure-mode
+conversation and one DNC conversation live once the daily quota resets, to close this out with the
+same rigor as the happy path.
+
+`pytest` — 46/46 pass, no `GEMINI_API_KEY` needed. `ruff check`/`format --check` clean (one
+pre-existing line-length violation in `booking.py`, left over from the pre-shutdown uncommitted
+work, fixed in passing).
+
+### 2026-08-24 · 06:05 IST — P3's last live gap closed: dev-model workaround for the daily quota
+
+The `gemini-3.6-flash` free-tier daily cap (20 req/day, hit earlier this session) is scoped
+**per project per model**, not per account — confirmed from the 429 error body's `quotaId:
+"GenerateRequestsPerDayPerProjectPerModel-FreeTier"`. Rather than wait for the reset or add
+billing, listed available models (`client.aio.models.list()`) and live-tested three lite-tier
+candidates: `gemini-2.5-flash-lite` is retired for new users (`404`, same "no longer available"
+pattern as `gemini-2.5-flash` in the D13 log entry); `gemini-3.1-flash-lite` and
+`gemini-flash-lite-latest` both responded. Picked **`gemini-3.1-flash-lite`** (a pinned version,
+not a `-latest` alias that can silently swap models under a test run) and pointed the local
+`.env`'s `CHAT_MODEL`/`ANALYTICS_MODEL` at it — **`.env` only, gitignored; `.env.example` and
+`config.py`'s shipping default stay on `gemini-3.6-flash`**, since that is the live-verified
+choice for what actually ships (rules.md A1). This is a dev-testing workaround, not a decision —
+no Decision Log row.
+
+With a fresh, unexhausted quota bucket, closed both items the last log entry deferred:
+
+- **F-10 (booking failure):** a real conversation with `FORCE_BOOKING_FAILURE=slot_unavailable`
+  produced the correct recovery — "That slot was just booked by someone else... I have 11:30 AM or
+  1:00 PM available" — using the real alternatives from the tool output, `stage` stayed `BOOKING`
+  (never `CONFIRMED`), no false claim.
+- **F-08 (DNC):** "Please stop contacting me" correctly triggered `set_contact_preference
+  (do_not_contact)`, `stage` → `DO_NOT_CONTACT`. A follow-up message ("can you tell me the price
+  of a 2 BHK") got the fixed acknowledgement with `usage` all-zero, and the server log's count of
+  `generativelanguage.googleapis.com` requests was identical before and after that second turn —
+  **zero LLM calls**, confirmed from the log, not just the response shape.
+
+Phase 3's exit gate is now fully live-verified, not partially. `gemini-3.1-flash-lite` also
+correctly ran the full `update_lead_profile → check_slot_availability → book_site_visit` sequence
+on the happy path first, confirming tool-calling behaviour isn't `gemini-3.6-flash`-specific.
+
+### 2026-08-24 · 07:30 IST — Phase 4 gate passed: web interface built and browser-verified
+
+Built all three static files from stubs: `app/static/index.html` (header with the north-star
+mark, channel toggle, theme toggle, mobile rail-toggle chevron; message list as `role="log"
+aria-live="polite"`; composer; "End conversation"; a tool-trace panel and an analytics panel that
+renders whatever `POST /api/session/{id}/end` returns as raw JSON — honest about P5 not existing
+yet rather than inventing fields), `app/static/styles.css` (the full token set from `design.md`
+§7, light/dark/system theme switching per §2.4, all components in §5), `app/static/app.js`
+(session bootstrap, send/receive, typing indicator, tool-trace rendering with failed rows expanded
+by default per §5.7, channel-switch-starts-a-new-session per §5.6, error toasts from the error
+envelope — `textContent` only, confirmed zero `innerHTML` calls, rule C9).
+
+**No Chrome extension available in this sandbox**, so verified in a real browser a different way:
+launched headless Chrome with `--remote-debugging-port`, drove it directly over the DevTools
+Protocol via the `websockets` package (no Playwright install needed) — real `Page.navigate`,
+`Runtime.evaluate`, `Emulation.setDeviceMetricsOverride`, `Page.captureScreenshot` calls against
+the actual running `uvicorn` server, not a static render.
+
+**Two real bugs caught by looking at the screenshots, not by reading the CSS:**
+1. At 360px the header's title truncated to "N…" — the channel toggle, theme icon, and rail
+   chevron left too little room on one 64px row. Fixed by wrapping the header to two rows below
+   420px (brand on its own row, controls below) rather than shrinking text or icons below
+   legibility/touch-target size.
+2. The composer's placeholder text ("Type a message… (Enter to send, Shift+Enter for a new
+   line)") wrapped to two lines and grew the input box, since only `min-height`/`max-height` were
+   set — Chromium's default field-sizing grows to fit content (including a wrapped placeholder)
+   when no explicit `height` is set. Fixed with an explicit starting `height: 24px` plus
+   `overflow: hidden`; `autoGrowComposer()`'s `input`-event resize takes over once the user types.
+
+**Also caught, not part of the original design.md spec but required by its own §6:** `.icon-button`
+was 40×40px and `.channel-toggle__option` had `min-height: 34px` — both below design.md's own
+"touch targets ≥ 44×44px, including the theme and channel toggles" rule. Bumped both to 44px. The
+composer's send button stays at 40px per its own explicit §5.5 spec, which names 40px directly —
+not the same oversight, a deliberate exception the design doc already made.
+
+**Verified live in the browser, not just read from the DOM:**
+- A real conversation end-to-end through the actual UI (composer → fetch → orchestrator → real
+  Gemini call → tool dispatch where relevant → rendered reply), using the `gemini-3.1-flash-lite`
+  dev key from the P3 quota workaround.
+- Typing indicator appears while waiting, clears on reply.
+- Devanagari renders with real glyphs (no tofu boxes) and gets `lang="hi"` via a Unicode-range
+  detection in `langFor()`.
+- Tool trace panel: OK rows collapsed, FAILED rows expanded by default, JSON input/output visible,
+  status carried by a dot **and** a text label (never colour alone, per design.md §6).
+- Light theme, explicit dark theme, and the two-row mobile header all screenshotted and confirmed
+  after the fixes above.
+- Zero console errors on a fresh load (the initial run had one — a `favicon.ico` 404 — fixed with
+  an inline-SVG-data-URI favicon using the same north-star mark, so a reviewer's devtools stays
+  clean).
+
+**Not built, correctly, because P5 doesn't exist yet:** the analytics panel shows the raw
+`POST .../end` response (`{session_id, ended_at}` today) rather than a scored summary — this is
+the named P4 descope option ("keep a raw JSON view"), not a gap.
+
+`pytest` — 46/46 pass (no backend code changed this phase). `ruff check`/`format --check` clean.
+`node --check app/static/app.js` clean (JS syntax only — no linter configured for JS, out of the
+approved-stack budget per `rules.md` §2).
+
 ---
 
 ## 3. Currently Working On
 
 **File:** *none — between phases*
-**Phase:** P2 gate genuinely passed — live-verified against the real Gemini API with the user's
-own key (10-turn memory, EN/Hindi/Hinglish mirroring, anti-hallucination on a discount request,
-voice number verbalisation). Model defaults corrected from guessed (`gemini-2.5-flash/pro`) to
-verified-working (`gemini-3.6-flash` for both, since this account's free tier has zero `pro`
-quota) across `.env`, `.env.example`, `app/config.py`, and the docs. Not yet committed.
-**Next action:** commit this batch (model-default corrections + the live-verification log entry),
-then start **P3 — Tools & Booking Simulation**: `app/services/booking.py`, `app/services/crm.py`,
-`app/agent/tools.py` (five schemas per `Architecture.md` §5, adapted to Gemini's `function_
-declarations` shape per rules.md A5–A8), then wire dispatch into `orchestrator.py` (replace the
-`TODO(P3)` stub).
+**Phase:** P4 gate passed, browser-verified. On branch `booking-tools-ui`, ready to start P5
+(Analytics Engine) — the phase this branch's sibling `agent-chat-core` will eventually merge in
+front of, per `phases.md`'s critical path P1→P2→P3→P5→P6→P7.
+**Next action:** **P5 — Analytics Engine**: `ConversationAnalytics` Pydantic model (PRD §7 field
+set), `app/agent/analytics.py` (extraction prompt + `response_schema`, reading `response.parsed`),
+the deterministic-overwrite step (D6) from the tool-event log, `app/services/scoring.py`
+(hot/warm/cold + 0–100 score), and wiring `POST /api/session/{id}/end` /
+`GET /api/session/{id}/analytics` / `GET /api/session/{id}/transcript` to return the real record —
+which the P4 analytics panel already knows how to display as JSON without any frontend change.
 
 > Exactly one entry belongs here at any time. Replace it, do not append.
 
@@ -371,18 +543,24 @@ declarations` shape per rules.md A5–A8), then wire dispatch into `orchestrator
 
 ## 4. Next Up (immediate queue)
 
-1. **P3 · `app/services/booking.py`** — slot generation, Indian mobile validation, the four
-   deterministic failure modes, `FORCE_BOOKING_FAILURE` injection.
-2. **P3 · `app/services/crm.py`** — escalation tickets, DNC register, lead records.
-3. **P3 · `app/agent/tools.py`** — the five tool schemas (`strict: true`, `additionalProperties:
-   false`) + dispatch table + `ToolEvent` recording.
-4. **P3 · Wire dispatch into `orchestrator.py`** — replace the `TODO(P3)` stub: parallel tool
-   execution, all results in one user message (A8), `is_error: true` + recovery hint on failure
-   (A9), DNC short-circuit with no LLM call.
-5. **P3 · `tests/test_booking.py`** (every failure mode) + `tests/test_orchestrator.py` (loop,
-   parallel results, iteration cap, error path).
-6. **Deferred, ask the user when relevant:** re-run the P2 live exit-gate checks once their
-   Anthropic account has a credit balance (key already in `.env`).
+1. **P5 · `ConversationAnalytics` model** — full PRD §7 field set with enums.
+2. **P5 · `app/agent/analytics.py`** — extraction prompt, `response_schema=ConversationAnalytics`,
+   `response.parsed`.
+3. **P5 · Deterministic overwrite (D6)** — `site_visit_status`, `booking_reference`,
+   `escalated_to_human`, `contact_preference`, `turn_count`, `duration_seconds` from the tool-event
+   log, never the model.
+4. **P5 · `app/services/scoring.py`** — hot/warm/cold rules, 0–100 score.
+5. **P5 · Wire the three endpoints** — `POST /api/session/{id}/end` (replace the P0 stub),
+   `GET /api/session/{id}/analytics`, `GET /api/session/{id}/transcript`.
+6. **P5 · Failure path** — one retry, then a partial record from deterministic fields only,
+   `summary = "Analytics extraction failed"`, never a fabricated record.
+7. **Before shipping (P8 or a final pre-submission pass):** confirm `.env`'s `CHAT_MODEL`/
+   `ANALYTICS_MODEL` are back on `gemini-3.6-flash` — a reviewer cloning the repo uses
+   `.env.example`'s default regardless, but re-run one live conversation against `gemini-3.6-flash`
+   specifically before recording the final demo, not just the dev-model stand-in.
+8. **Deferred, ask the user when relevant:** re-run the P2 live exit-gate checks once their
+   Anthropic account has a credit balance (key already in `.env`) — no longer load-bearing since
+   the project moved to Gemini (D13), kept only in case Anthropic is ever revisited.
 
 ---
 
@@ -445,7 +623,7 @@ Scenario failures land here from the Phase 6 run and are worked in severity orde
 |---|---|---|
 | `prompts/FINAL_PROMPT.md` (both channel variants) | P1 | Not started |
 | FastAPI backend | P0–P5 | Not started |
-| Web chat interface | P4 | Not started |
+| Web chat interface | P4 | Done — `app/static/{index.html,styles.css,app.js}` |
 | `data/project_facts.yaml` | P1 | Not started |
 | `docs/TEST_RESULTS.md` | P6, P7 | Not started |
 | `README.md` (run · assumptions · limitations · AI tools) | P8 | Not started |

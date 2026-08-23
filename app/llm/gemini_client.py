@@ -42,13 +42,14 @@ class GeminiLLMClient:
         *,
         system: str,
         messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
+        tools: list[types.Tool] | None = None,
     ) -> types.GenerateContentResponse:
         config = types.GenerateContentConfig(
             system_instruction=system,
             max_output_tokens=_CHAT_MAX_OUTPUT_TOKENS,
             thinking_config=types.ThinkingConfig(thinking_level="LOW"),
             http_options=_http_options(_CHAT_TIMEOUT_MS),
+            tools=tools,
         )
         async with _log_gemini_errors():
             response = await self._client.aio.models.generate_content(
