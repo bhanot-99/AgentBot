@@ -3,8 +3,9 @@
 **This is the live state tracker. It is the first file to read when picking work up, and the last
 file to write before putting work down.**
 
-**Last updated:** 2026-08-24 05:10 IST
-**Current phase:** P3 — Tools & Booking Simulation (gate passed, verified live against real Gemini)
+**Last updated:** 2026-08-24 06:05 IST
+**Current phase:** P3 — Tools & Booking Simulation (gate fully passed, every exit-gate item
+verified live, including the two deferred by the earlier quota block)
 **Overall status:** P0–P3 complete and live-verified · P4 not begun
 **Elapsed:** ~10.5 h of 24 h · **Remaining:** ~13.5 h
 
@@ -56,9 +57,9 @@ Status values: `Not started` · `In progress` · `Gate passed` · `Blocked` · `
 | F-05 | Grounded answers / anti-hallucination | P1, P7 | **Verified live** — refused a direct discount request per the deflection pattern; hardening (P7) still ahead |
 | F-06 | Objection handling | P1, P7 | Prompt written (P1) — not yet exercised live; hardening is P7 |
 | F-07 | Busy / uninterested / call-later | P1 | Verified live — "let me think" handled gracefully, no re-pitch |
-| F-08 | Do-not-contact compliance | P1, P3 | Code short-circuit implemented and unit-tested (no LLM call once set); not yet exercised live end-to-end (blocked on the free-tier daily quota, not a code gap — see the P3 log entry) |
+| F-08 | Do-not-contact compliance | P1, P3 | **Verified live** — `set_contact_preference(do_not_contact)` fired on request, stage flipped to `DO_NOT_CONTACT`, and a follow-up message confirmed **zero** further LLM calls (log-verified) even when the customer tried re-engaging |
 | F-09 | Site-visit booking | P3 | **Verified live** — real conversation produced a confirmed booking with a real reference and `stage: CONFIRMED` |
-| F-10 | Booking-failure recovery | P3, P7 | All four failure modes unit-tested deterministically (`FORCE_BOOKING_FAILURE`); live exercise of a failure path deferred to the next session (quota-blocked); hardening is P7 |
+| F-10 | Booking-failure recovery | P3, P7 | **Verified live** — `slot_unavailable` produced a graceful recovery offering the two real alternative slots, no false confirmation, `stage` stayed `BOOKING`; the other three modes remain unit-tested only; hardening is P7 |
 | F-11 | Human escalation | P3 | Implemented and unit-tested (model-invoked and iteration-cap-forced); not yet exercised live |
 | F-12 | Proper conversation ending | P1 | Prompt written (P1) — not yet exercised live |
 | F-13 | Channel duality (chat / voice) | P1, P7 | Verified live on both channels — voice number verbalisation and word cap confirmed; hardening (P7) still ahead |
@@ -433,18 +434,48 @@ same rigor as the happy path.
 pre-existing line-length violation in `booking.py`, left over from the pre-shutdown uncommitted
 work, fixed in passing).
 
+### 2026-08-24 · 06:05 IST — P3's last live gap closed: dev-model workaround for the daily quota
+
+The `gemini-3.6-flash` free-tier daily cap (20 req/day, hit earlier this session) is scoped
+**per project per model**, not per account — confirmed from the 429 error body's `quotaId:
+"GenerateRequestsPerDayPerProjectPerModel-FreeTier"`. Rather than wait for the reset or add
+billing, listed available models (`client.aio.models.list()`) and live-tested three lite-tier
+candidates: `gemini-2.5-flash-lite` is retired for new users (`404`, same "no longer available"
+pattern as `gemini-2.5-flash` in the D13 log entry); `gemini-3.1-flash-lite` and
+`gemini-flash-lite-latest` both responded. Picked **`gemini-3.1-flash-lite`** (a pinned version,
+not a `-latest` alias that can silently swap models under a test run) and pointed the local
+`.env`'s `CHAT_MODEL`/`ANALYTICS_MODEL` at it — **`.env` only, gitignored; `.env.example` and
+`config.py`'s shipping default stay on `gemini-3.6-flash`**, since that is the live-verified
+choice for what actually ships (rules.md A1). This is a dev-testing workaround, not a decision —
+no Decision Log row.
+
+With a fresh, unexhausted quota bucket, closed both items the last log entry deferred:
+
+- **F-10 (booking failure):** a real conversation with `FORCE_BOOKING_FAILURE=slot_unavailable`
+  produced the correct recovery — "That slot was just booked by someone else... I have 11:30 AM or
+  1:00 PM available" — using the real alternatives from the tool output, `stage` stayed `BOOKING`
+  (never `CONFIRMED`), no false claim.
+- **F-08 (DNC):** "Please stop contacting me" correctly triggered `set_contact_preference
+  (do_not_contact)`, `stage` → `DO_NOT_CONTACT`. A follow-up message ("can you tell me the price
+  of a 2 BHK") got the fixed acknowledgement with `usage` all-zero, and the server log's count of
+  `generativelanguage.googleapis.com` requests was identical before and after that second turn —
+  **zero LLM calls**, confirmed from the log, not just the response shape.
+
+Phase 3's exit gate is now fully live-verified, not partially. `gemini-3.1-flash-lite` also
+correctly ran the full `update_lead_profile → check_slot_availability → book_site_visit` sequence
+on the happy path first, confirming tool-calling behaviour isn't `gemini-3.6-flash`-specific.
+
 ---
 
 ## 3. Currently Working On
 
 **File:** *none — between phases*
-**Phase:** P3 gate passed. On branch `booking-tools-ui`, ready to start P4 (Web Interface) — the
-other phase this branch was created for.
+**Phase:** P3 gate fully passed, including live verification of every exit-gate item. On branch
+`booking-tools-ui`, ready to start P4 (Web Interface) — the other phase this branch was created
+for.
 **Next action:** **P4 — Web Interface**: `app/static/index.html`, `styles.css`, `app.js` per
 `phases.md` P4 tasks — chat pane, tool-trace panel, channel toggle, analytics panel (stub until
-P5). Before starting, re-run one booking-failure and one DNC conversation live once the Gemini
-free-tier daily quota resets (see the P3 log entry) — quick to slot in, and closes the one gap
-left from this phase.
+P5).
 
 > Exactly one entry belongs here at any time. Replace it, do not append.
 
@@ -452,16 +483,17 @@ left from this phase.
 
 ## 4. Next Up (immediate queue)
 
-1. **Quick, before or early in P4:** one live booking-failure conversation
-   (`FORCE_BOOKING_FAILURE=slot_unavailable` or similar) and one live DNC conversation, once the
-   daily quota resets — the only P3 exit-gate items not yet exercised against the real API.
-2. **P4 · `app/static/index.html`** — header, chat pane, composer, channel toggle, "End
+1. **P4 · `app/static/index.html`** — header, chat pane, composer, channel toggle, "End
    conversation" button, analytics panel, tool-trace panel.
-3. **P4 · `app/static/styles.css`** — tokens from `design.md`, light + dark, Devanagari-safe font
+2. **P4 · `app/static/styles.css`** — tokens from `design.md`, light + dark, Devanagari-safe font
    stack, responsive to 360px.
-4. **P4 · `app/static/app.js`** — session bootstrap, send/receive, typing indicator, `textContent`
+3. **P4 · `app/static/app.js`** — session bootstrap, send/receive, typing indicator, `textContent`
    rendering (never `innerHTML`, rule C9), live tool-event trace, error toasts from the error
    envelope.
+4. **Before shipping (P8 or a final pre-submission pass):** confirm `.env`'s `CHAT_MODEL`/
+   `ANALYTICS_MODEL` are back on `gemini-3.6-flash` — a reviewer cloning the repo uses
+   `.env.example`'s default regardless, but re-run one live conversation against `gemini-3.6-flash`
+   specifically before recording the final demo, not just the dev-model stand-in.
 5. **Deferred, ask the user when relevant:** re-run the P2 live exit-gate checks once their
    Anthropic account has a credit balance (key already in `.env`) — no longer load-bearing since
    the project moved to Gemini (D13), kept only in case Anthropic is ever revisited.
