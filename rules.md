@@ -43,16 +43,21 @@ needs an explicit justification in `Architecture.md`.
 | Web | **FastAPI** + Uvicorn | Mandated by the assignment |
 | Validation | Pydantic v2 | Requests, responses, domain models, analytics schema |
 | Config | pydantic-settings | The **only** place `os.environ` is read |
-| LLM | `anthropic` (official SDK) | Never raw `requests`/`httpx` against the API |
+| LLM | `google-genai` (official SDK) | Never raw `requests`/`httpx` against the API |
 | Data | PyYAML | `data/project_facts.yaml` only |
 | Frontend | Vanilla HTML + CSS + JS | No framework, no bundler, no transpiler |
 | Fonts | Google Fonts | Plus Jakarta Sans · Noto Sans Devanagari · JetBrains Mono |
 | Tests | pytest, pytest-asyncio, httpx | `TestClient` for API contracts |
 | Lint | ruff | Lint + format. One tool |
 
-**Production dependency budget: 6.** `fastapi`, `uvicorn`, `anthropic`, `pydantic`,
+**Production dependency budget: 6.** `fastapi`, `uvicorn`, `google-genai`, `pydantic`,
 `pydantic-settings`, `pyyaml`. Adding a seventh requires deleting one or amending this table
 with a written reason.
+
+**Provider history:** v1 used the `anthropic` SDK (Claude). Switched to `google-genai` (Gemini) —
+decision D13, `memory.md` 2026-08-24. The `LLMClient` Protocol (`app/llm/base.py`) is the seam this
+swap exercises; it previously leaked Anthropic-specific types into its signature, which was fixed
+as part of this switch (see D13's rationale) rather than repeated.
 
 ---
 
@@ -67,8 +72,8 @@ with a written reason.
 | Postgres, MongoDB, SQLAlchemy, Alembic | Nothing needs persistence in v1 |
 | Redis, Celery, RabbitMQ | No background work exists |
 | Docker / docker-compose | Adds a prerequisite the reviewer may not have |
-| `requests`, `httpx` calls to the Anthropic API | Use the SDK. Mixing transports is explicitly wrong |
-| OpenAI SDK, LiteLLM, OpenAI-compatible shims | This is an Anthropic build; a shim would obscure real SDK usage |
+| `requests`, `httpx` calls to the Gemini API | Use the SDK. Mixing transports is explicitly wrong |
+| OpenAI SDK, Anthropic SDK, LiteLLM, OpenAI-compatible shims | This is a `google-genai` build; a shim or a second provider SDK would obscure real SDK usage |
 | `os.getenv` outside `config.py` | Untraceable configuration |
 | `print()` for diagnostics | Use the configured logger |
 | Global mutable singletons other than the injected store/client | Untestable |
@@ -76,64 +81,78 @@ with a written reason.
 
 ---
 
-## 4. Anthropic API Rules
+## 4. Model Provider API Rules (Gemini / `google-genai`)
 
-These are current-API rules. Several contradict older patterns; follow these.
+These were verified against the installed `google-genai==2.19.0` SDK's actual signatures before
+being written (not assumed) — see D13 in `memory.md` for how. Several concepts don't map 1:1 from
+the Anthropic SDK v1 used; the differences are called out explicitly, not papered over.
 
-**A1 — Model IDs come from config, never hardcoded in business logic.**
-`claude-opus-5` is the default for both chat and analytics, set in `config.py` and overridable via
-`CHAT_MODEL` / `ANALYTICS_MODEL`. Never append a date suffix to a model ID.
+**A1 — Model IDs come from config, never hardcoded in business logic.** Set via `config.py` and
+overridable via `CHAT_MODEL` / `ANALYTICS_MODEL`. Defaults (`gemini-2.5-flash` chat,
+`gemini-2.5-pro` analytics) were current as of this project's knowledge cutoff — **verify current
+availability in Google AI Studio before relying on them**; Gemini model names move faster than
+this document.
 
-**A2 — Do not send `budget_tokens`.** Removed on Opus 5; sending it returns 400. Control depth
-with `output_config={"effort": ...}` instead (`low` for chat turns, `medium` for analytics).
+**A2 — Reasoning depth via `GenerateContentConfig.thinking_config.thinking_level`:** `"low"` for
+chat turns, `"medium"` for analytics extraction. Not a raw token budget.
 
-**A3 — Do not set `thinking: {"type": "disabled"}`.** Thinking is on by default on Opus 5. With it
-disabled the model can write a tool call into visible text (the call never runs, no error is
-raised) and can leak internal tags. Lower `effort` instead — same latency win, no failure mode.
+**A3 — No `temperature` / `top_p` / `top_k` set.** Left at provider defaults — thinking level is
+this project's tuning lever, not sampling parameters.
 
-**A4 — No assistant prefill.** A trailing assistant message to force a format returns 400 on
-Opus 5. Use `output_config.format` / `messages.parse()` or system-prompt instructions.
+**A4 — Structured extraction uses `response_schema=PydanticModel` + `response_mime_type=
+"application/json"`** on `GenerateContentConfig`, reading `response.parsed` (already a validated
+instance of the Pydantic model). Never hand-roll JSON parsing of `response.text`.
 
-**A5 — No `temperature` / `top_p` / `top_k`.** Removed on Opus 5; they return 400.
+**A5 — Tools are declared as `types.Tool(function_declarations=[...])`**, each with an explicit
+`required` list in its parameter schema. *(Phase 3 — no tools exist yet.)*
 
-**A6 — Structured extraction uses `client.messages.parse(output_format=PydanticModel)`** and reads
-`response.parsed_output`. Do not hand-roll JSON parsing of a text block, and do not use the
-deprecated top-level `output_format` parameter on `messages.create` — that path is
-`output_config={"format": {...}}`.
+**A6 — A tool call is detected by a `function_call` Part in `candidate.content.parts`, not by a
+distinct `finish_reason`.** Unlike some APIs, a successful function call normally still reports
+`finish_reason == "STOP"` — check the parts, not just the finish reason. *(Phase 3.)*
 
-**A7 — Tools are `strict: true`** with `additionalProperties: false` and an explicit `required`
-list. Tool inputs are read as parsed dicts; never string-match a serialised input.
+**A7 — All tool results for one model turn go back as `function_response` Parts inside a single
+following `user`-role `Content`.** Splitting them across messages silently trains the model out of
+parallel tool use. *(Phase 3.)*
 
-**A8 — All tool results for one assistant turn go back in a single user message.** Splitting them
-across messages silently trains the model out of parallel tool use.
+**A8 — Failed tools are recorded with an explicit error flag and a recovery hint** in the
+`function_response` payload — never a dropped result, never a raised exception that kills the
+turn. *(Phase 3.)*
 
-**A9 — Failed tools return `tool_result` with `is_error: true` and a recovery hint** — never a
-dropped result, never a raised exception that kills the turn.
+**A9 — Conversation history stores Gemini `Content` blocks verbatim**
+(`role: "user"` / `"model"`, `parts: [...]`). Append the response's own content, not an extracted
+string. Rewriting blocks into a bespoke format and back is the standard cause of tool-loop
+corruption.
 
-**A10 — Conversation history stores Anthropic content blocks verbatim.** Append
-`response.content` (the block list), not an extracted string. Rewriting blocks into a bespoke
-format and back is the standard cause of tool-loop corruption.
-
-**A11 — Prompt caching discipline.** The composed system prompt carries
-`cache_control: {"type": "ephemeral"}`. Nothing volatile may appear before that breakpoint — no
-`datetime.now()`, no UUID, no unsorted `json.dumps`, no per-turn lead state. Volatile state goes
-in a second system block after it. The tool list is built once at import and never reordered
-(render order is `tools` → `system` → `messages`). Log `usage.cache_read_input_tokens`; if it is
-zero across turns, a silent invalidator has been introduced and must be found before merging.
-
-**A12 — `max_tokens` is set deliberately:** 1024 for chat (turns are word-capped), 4096 for
+**A10 — `max_output_tokens` is set deliberately:** 1024 for chat (turns are word-capped), 4096 for
 analytics. Not left to chance, not set to 16000 "to be safe".
 
-**A13 — Timeouts are explicit:** 30 s chat, 60 s analytics, via `with_options`. The SDK default of
-10 minutes is unacceptable behind a chat UI.
+**A11 — Timeouts are explicit via `GenerateContentConfig.http_options.timeout`** (milliseconds):
+30000 for chat, 60000 for analytics. The SDK has no chat-appropriate default.
 
-**A14 — Catch a specific chain, most-specific-first:** `AuthenticationError` → `NotFoundError` →
-`RateLimitError` → `APIStatusError` → `APIConnectionError`/`APITimeoutError`. A single broad
-`except APIStatusError` erases the retryable/non-retryable distinction. Log `_request_id` on every
-failure.
+**A12 — Retries are explicit via `http_options.retry_options=types.HttpRetryOptions(attempts=3)`.**
+Unlike the Anthropic SDK this project used before, `google-genai` does **not** retry by default
+(a single attempt) — omitting this means one transient failure surfaces immediately to the user.
 
-**A15 — Never log the API key, a full prompt, or a full transcript at INFO.** Mask phone numbers
+**A13 — Catch a specific chain, most-specific-first, branching on `errors.ClientError.status`
+(the canonical string — e.g. `"UNAUTHENTICATED"`) not `.code` (the HTTP int).** Verified against a
+live call with a bad key: an invalid key returns `code=400, status="INVALID_ARGUMENT"`, not the
+401 a naive int-based branch would expect — don't assume the HTTP code without checking. Branch:
+`.status` in `("UNAUTHENTICATED", "PERMISSION_DENIED")` → authentication; `"NOT_FOUND"` → not
+found; `"RESOURCE_EXHAUSTED"` → rate limited; any other `ClientError` or `ServerError` → general
+status error; `(httpx.TimeoutException, httpx.ConnectError, httpx2.TimeoutException,
+httpx2.ConnectError)` → connection error (the SDK vendors both an `httpx` and an `httpx2`
+transport — catch both). Gemini error responses do not carry a per-request id the way Anthropic's
+did — log `.code` / `.status` / `.message`, do not fabricate a request-id field that isn't there.
+
+**A14 — Never log the API key, a full prompt, or a full transcript at INFO.** Mask phone numbers
 to the last four digits everywhere.
+
+**A15 — Explicit context caching is not used in v1.** Gemini's caching is a separate stateful
+resource (`client.aio.caches.create`, TTL-bound, with its own minimum-token-count requirements) —
+not an inline per-request flag like Anthropic's `cache_control`. Given the 24-hour build scope, the
+full system prompt is sent every turn. `usage_metadata.cached_content_token_count` will read `0` as
+a result; **this is expected, not a bug**, unless and until explicit caching is added as a later
+enhancement. Documented as a deliberate simplification (D13), not silently dropped.
 
 ---
 
@@ -213,7 +232,7 @@ with context and either recovered from explicitly or re-raised.
 
 ## 7. Testing Rules
 
-**T1 — Tier 1 tests never call the API.** They must pass with no `ANTHROPIC_API_KEY` set, in under
+**T1 — Tier 1 tests never call the API.** They must pass with no `GEMINI_API_KEY` set, in under
 two seconds, using `FakeLLMClient`. If a test needs a key, it belongs in Tier 2.
 
 **T2 — Every requirement in `PRD.md` §6 has at least one scenario file** carrying its feature ID.

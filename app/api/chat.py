@@ -31,14 +31,14 @@ async def chat(
     if session.ended_at is not None:
         raise HTTPException(status_code=409, detail="session_ended")
 
-    session.messages.append({"role": "user", "content": [{"type": "text", "text": body.message}]})
+    session.messages.append({"role": "user", "parts": [{"text": body.message}]})
 
     system_prompt = build_system_prompt(session.channel.value)
     reply_text, usage = await Orchestrator(llm, system_prompt).run_turn(session)
 
     await store.save(session)
 
-    turn_id = sum(1 for message in session.messages if message["role"] == "assistant")
+    turn_id = sum(1 for message in session.messages if message["role"] == "model")
 
     return ChatResponse(
         session_id=session.id,

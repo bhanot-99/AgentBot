@@ -46,10 +46,10 @@ which is why it sits off the spine.
 
 **Tasks**
 1. `git init`, **`.gitignore` in the first commit** (`.env`, `__pycache__`, `.venv`, `*.log`, `.DS_Store`) — rule G1.
-2. `.env.example`: `ANTHROPIC_API_KEY=`, `CHAT_MODEL=claude-opus-5`, `ANALYTICS_MODEL=claude-opus-5`, `SESSION_TTL_MINUTES=120`, `FORCE_BOOKING_FAILURE=`, `LOG_LEVEL=INFO`, `ALLOWED_ORIGINS=`.
+2. `.env.example`: `GEMINI_API_KEY=`, `CHAT_MODEL=gemini-2.5-flash`, `ANALYTICS_MODEL=gemini-2.5-pro`, `SESSION_TTL_MINUTES=120`, `FORCE_BOOKING_FAILURE=`, `LOG_LEVEL=INFO`, `ALLOWED_ORIGINS=`.
 3. `requirements.txt` — the six production deps + pytest, pytest-asyncio, ruff.
 4. Full directory tree per `Architecture.md` §6, with `__init__.py` files.
-5. `app/config.py` — pydantic-settings `Settings`; **fail fast at startup** with a named error when `ANTHROPIC_API_KEY` is absent.
+5. `app/config.py` — pydantic-settings `Settings`; **fail fast at startup** with a named error when `GEMINI_API_KEY` is absent.
 6. `app/main.py` — FastAPI app, lifespan singletons, CORS, `GET /health`, static mount.
 7. Structured JSON logging with a phone-masking filter.
 8. `ruff.toml`.
@@ -100,7 +100,7 @@ The highest-value phase in the project. Time here is worth double time anywhere 
 
 **Tasks**
 1. `app/llm/base.py` — `LLMClient` Protocol (`complete`, `parse`).
-2. `app/llm/anthropic_client.py` — SDK wrapper: explicit timeouts (A13), `max_tokens` (A12), `output_config.effort` (A2), prompt caching with volatile state in a second system block (A11), the specific exception chain (A14), usage logging.
+2. `app/llm/gemini_client.py` — SDK wrapper: explicit timeouts (A11), `max_output_tokens` (A10), `thinking_config.thinking_level` (A2), explicit retries (A12), the specific exception chain (A13), usage logging.
 3. `app/models.py` — `Session`, `LeadProfile`, `ToolEvent`, `Stage`, request/response models.
 4. `app/store/base.py` + `memory_store.py` — Protocol + dict-backed store with TTL sweep.
 5. `app/agent/orchestrator.py` — the turn loop (`Architecture.md` §3.2) without tool dispatch.
@@ -111,7 +111,9 @@ The highest-value phase in the project. Time here is worth double time anywhere 
 **Exit gate**
 - A ten-turn conversation via `curl` or `/docs` stays coherent and **never re-asks an answered question** (F-04).
 - Language mirroring visibly works on a Hindi and a Hinglish opener.
-- `cache_read_input_tokens > 0` from turn 2 onward — if it is zero, find the invalidator now, not later (A11).
+- `usage_metadata.cached_content_token_count` is expected to read `0` — explicit caching is not
+  used in v1 (A15); this is not the regression signal it would have been under the original
+  Anthropic design.
 - Tier 1 tests pass with **no** API key set (T1).
 
 **Descope:** drop the rate limiter (keep the length cap).
@@ -126,7 +128,9 @@ The highest-value phase in the project. Time here is worth double time anywhere 
 1. `app/services/booking.py` — slot generation (daily 10:00–18:00 IST, 90-minute windows, 1–30 days ahead), Indian mobile validation, and **four deterministic failure modes**: `slot_unavailable`, `invalid_date`, `invalid_phone`, `system_error`. Failure injection via `FORCE_BOOKING_FAILURE` so the demo can trigger it on cue (decision D10).
 2. `app/services/crm.py` — escalation tickets, DNC register, lead records.
 3. `app/agent/tools.py` — the five tool schemas (`strict: true`, `additionalProperties: false`) + dispatch table + session side effects + `ToolEvent` recording.
-4. Wire dispatch into the orchestrator: parallel execution, **all results in one user message** (A8), `is_error: true` with a recovery hint on failure (A9), iteration cap 4.
+4. Wire dispatch into the orchestrator: parallel execution, **all `function_response` parts in one
+   `user`-role `Content`** (A7), an explicit error flag + recovery hint on failure (A8), iteration
+   cap 4.
 5. DNC short-circuit: once `do_not_contact` is set, the turn returns a fixed acknowledgement with **no LLM call**.
 6. `tests/test_booking.py` (every failure mode) + `tests/test_orchestrator.py` (loop, parallel results, cap, error path).
 
@@ -167,7 +171,7 @@ The highest-value phase in the project. Time here is worth double time anywhere 
 
 **Tasks**
 1. `ConversationAnalytics` Pydantic model — the full PRD §7 field set with enums.
-2. `app/agent/analytics.py` — extraction prompt + `client.messages.parse(output_format=ConversationAnalytics)` (A6), reading `parsed_output`.
+2. `app/agent/analytics.py` — extraction prompt + `response_schema=ConversationAnalytics` (A4), reading `response.parsed`.
 3. **Deterministic overwrite** (decision D6): `site_visit_status`, `booking_reference`, `escalated_to_human`, `contact_preference`, `turn_count`, `duration_seconds` come from the tool-event log, never the model. This is the step that makes the record trustworthy — comment it as such (C5).
 4. `app/services/scoring.py` — the hot/warm/cold rules and the 0–100 score (PRD §7).
 5. `POST /api/session/{id}/end`, `GET /api/session/{id}/analytics`, `GET /api/session/{id}/transcript`.

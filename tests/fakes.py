@@ -1,43 +1,45 @@
 from typing import Any, TypeVar
 
-from anthropic.types import Message, TextBlock, TextBlockParam
-from anthropic.types import Usage as AnthropicUsage
+from google.genai import types
 from pydantic import BaseModel
 
 T = TypeVar("T", bound=BaseModel)
 
 
-def text_message(text: str, *, stop_reason: str = "end_turn") -> Message:
-    """Builds a real anthropic.types.Message so callers see exactly what the SDK returns."""
-    return Message(
-        id="msg_fake",
-        content=[TextBlock(text=text, type="text")],
-        model="claude-opus-5-fake",
-        role="assistant",
-        stop_reason=stop_reason,
-        type="message",
-        usage=AnthropicUsage(input_tokens=100, output_tokens=20, cache_read_input_tokens=0),
+def text_response(text: str, *, finish_reason: str = "STOP") -> types.GenerateContentResponse:
+    """Builds a real google.genai.types.GenerateContentResponse so callers see exactly what
+    the SDK returns."""
+    return types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(role="model", parts=[types.Part(text=text)]),
+                finish_reason=finish_reason,
+            )
+        ],
+        usage_metadata=types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=100, candidates_token_count=20, cached_content_token_count=0
+        ),
     )
 
 
 class FakeLLMClient:
     """Scripted, deterministic LLMClient for Tier 1 tests (rules.md T1) — no network, no key."""
 
-    def __init__(self, script: list[Message] | None = None) -> None:
+    def __init__(self, script: list[types.GenerateContentResponse] | None = None) -> None:
         self._script = list(script or [])
         self.calls: list[dict[str, Any]] = []
 
     async def complete(
         self,
         *,
-        system: list[TextBlockParam],
+        system: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
-    ) -> Message:
+    ) -> types.GenerateContentResponse:
         self.calls.append({"system": system, "messages": messages, "tools": tools})
         if self._script:
             return self._script.pop(0)
-        return text_message("Thanks for reaching out! How can I help you today?")
+        return text_response("Thanks for reaching out! How can I help you today?")
 
     async def parse(
         self,

@@ -111,7 +111,9 @@ def test_fake_llm_received_the_composed_system_prompt(
     client.post("/api/chat", json={"session_id": session_id, "message": "Hi"})
 
     assert len(fake_llm.calls) == 1
-    system_blocks = fake_llm.calls[0]["system"]
-    assert system_blocks[0]["cache_control"] == {"type": "ephemeral"}
-    assert "cache_control" not in system_blocks[1]
-    assert "Northstar One" in system_blocks[0]["text"]
+    system = fake_llm.calls[0]["system"]
+    assert isinstance(system, str)
+    assert "Northstar One" in system
+    # The volatile live-state block (rules.md A15 — no explicit caching in v1) is appended
+    # after the composed prompt, in the same string.
+    assert "Current lead profile" in system

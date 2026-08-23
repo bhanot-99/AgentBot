@@ -3,10 +3,10 @@
 **This is the live state tracker. It is the first file to read when picking work up, and the last
 file to write before putting work down.**
 
-**Last updated:** 2026-08-24 02:15 IST
-**Current phase:** P2 — Agent Core & Chat API (code complete · live exit-gate checks blocked)
-**Overall status:** P0–P1 complete · P2 code done, unverified live · P3 not begun
-**Elapsed:** ~7.0 h of 24 h · **Remaining:** ~17.0 h
+**Last updated:** 2026-08-24 03:00 IST
+**Current phase:** P2 — Agent Core & Chat API (re-ported to Gemini · live exit-gate checks still blocked)
+**Overall status:** P0–P1 complete · P2 code done on `google-genai`, unverified live · P3 not begun
+**Elapsed:** ~8.0 h of 24 h · **Remaining:** ~16.0 h
 
 ---
 
@@ -242,18 +242,77 @@ not inferred). The user chose to proceed without live verification rather than w
 `.env` now holds the user's real key locally (gitignored, confirmed via `git check-ignore`) for
 whenever they want to re-run this themselves or ask for a retry.
 
+### 2026-08-24 · 03:00 IST — Provider swap: Anthropic → Gemini (D13)
+
+User's explicit choice after the Anthropic billing block. Verified the installed
+`google-genai==2.19.0` SDK's actual signatures the same way the Anthropic SDK was verified in
+Phase 2 — not assumed from the old rules. Rewrote `rules.md` §2–§4 (approved stack, banned stack,
+all 15 provider API rules renumbered and re-derived from what was actually verified),
+`Architecture.md` (§2 diagram, §4 caching section, §7 tech stack + model config table, §9 error
+table, §10 data model comment, §11 security, §13 deploy command, §14 decision D13), and
+`phases.md` (P0 env var/model names, P2/P3/P5 rule citations and technical specifics).
+
+**Fixed a real design gap while doing this, not just swapped names:** `app/llm/base.py`'s
+`LLMClient` Protocol previously typed its return value as `anthropic.types.Message` — leaking a
+provider-specific type into the one seam `Architecture.md` documents as "provider-swappable." Now
+typed against `google.genai.types.GenerateContentResponse`, which is honest about what it is
+rather than pretending to be provider-neutral while not being so.
+
+Code: `app/llm/gemini_client.py` (new, replaces `anthropic_client.py`) — `thinking_config.
+thinking_level` (low/medium) replaces `output_config.effort`; `response_schema`/`response.parsed`
+replaces `messages.parse`; explicit `http_options.retry_options=HttpRetryOptions(attempts=3)`
+because `google-genai`, unlike the Anthropic SDK, does **not** retry by default. `app/agent/
+orchestrator.py` — `system` is now one concatenated string (prompt + live state), since v1 doesn't
+use Gemini's explicit context-caching API (a separate stateful resource, unlike Anthropic's inline
+`cache_control`) — documented as a deliberate simplification (rules.md A15), not a silent
+regression. `app/api/session.py` + `chat.py` — message shape changed from Anthropic's
+`{"role": "assistant"/"user", "content": [{"type": "text", ...}]}` to Gemini's
+`{"role": "model"/"user", "parts": [{"text": ...}]}`. `app/main.py` — exception handlers now catch
+`google.genai.errors.ClientError`/`ServerError` and both vendored `httpx`/`httpx2` transport error
+hierarchies instead of the Anthropic exception classes.
+
+**Two real bugs caught by testing live against the actual API, not by inspection:**
+1. `google.genai.errors.ClientError.status` is Google's canonical **string** status
+   (`"UNAUTHENTICATED"`, `"INVALID_ARGUMENT"`, ...), not the HTTP int — `.code` is the int. My
+   first draft branched on `.status in (401, 403)`, which would never match anything. Caught by
+   actually sending a request with a bad key and reading what came back: `code=400,
+   status="INVALID_ARGUMENT"` for an invalid key — not 401. Fixed in `gemini_client.py` and
+   corrected the same wrong assumption in `rules.md` A13 and `Architecture.md` §9 before it could
+   mislead a future session.
+2. `app/config.py`'s `gemini_api_key: str` field accepted an **empty string** as valid — meaning
+   `cp .env.example .env` without ever filling in the key would boot silently instead of
+   triggering the P0 fail-fast gate, defeating its entire purpose. This bug predates the Gemini
+   swap (the same gap existed for `anthropic_api_key`) and was only surfaced now because `.env`'s
+   key was cleared as part of the swap. Fixed with `Field(min_length=1)` and re-verified: an empty
+   key now produces the same one-sentence fail-fast message as a missing one.
+
+**Local `.env` updated** (not committed — confirmed still gitignored): the now-unused Anthropic
+key was cleared, `CHAT_MODEL`/`ANALYTICS_MODEL` corrected to the Gemini defaults. The user has not
+yet provided a `GEMINI_API_KEY`; live verification is still pending on that, same as it was
+pending on Anthropic billing before.
+
+**Verified live via `curl`, not just by reading the code:**
+- Fail-fast: no key **and** empty key both produce the one-sentence `GEMINI_API_KEY` message.
+- `uvicorn` boots with a placeholder key; `/health` 200; `POST /api/session` 201 with a real
+  greeting rendered from the facts YAML.
+- `POST /api/chat` against a real-but-invalid Gemini key → request correctly targets
+  `gemini-2.5-flash` (confirmed in the request log, catching the earlier stale-`.env` bug where it
+  was still hitting `claude-opus-5`) → clean 502 `llm_unavailable` envelope, zero leaked detail.
+- `pytest` — 18/18 pass with **`anthropic` fully uninstalled** from the venv (not just unimported),
+  confirming zero remaining runtime dependency on it. `ruff check`/`format --check` clean.
+
 ---
 
 ## 3. Currently Working On
 
 **File:** *none — between phases*
-**Phase:** P2 code complete; live exit-gate checks blocked on the user's Anthropic account
-having no credit balance (not a code defect — the request/response path was confirmed working
-end-to-end against the real API up to the billing rejection).
-**Next action:** proceeding to P3 per the user's explicit choice. When the user has billing sorted
-and wants it, re-run the P2 live checks (10-turn coherence, language mirroring, `cache_read_input_
-tokens > 0` from turn 2) using the key already saved in their local `.env` — do not re-ask for the
-key.
+**Phase:** P2 re-ported to `google-genai` (Gemini), code complete, ruff clean, 18/18 Tier 1 tests
+pass with `anthropic` fully uninstalled. Live exit-gate checks (10-turn coherence, language
+mirroring) are still unverified — now blocked on the user providing a `GEMINI_API_KEY`, not on
+Anthropic billing (that path is moot after the D13 swap).
+**Next action:** commit the provider-swap changes (docs + code, all currently uncommitted on
+`p0-p4`), then either (a) ask the user for a `GEMINI_API_KEY` to run the P2 live checks, or (b)
+proceed to P3 if they'd rather defer live verification again, same choice as after Phase 2.
 
 > Exactly one entry belongs here at any time. Replace it, do not append.
 
@@ -294,6 +353,7 @@ Seeded from `Architecture.md` §14. Add a row the moment a decision is made.
 | D10 | 2026-08-23 | Deterministic booking-failure injection via `FORCE_BOOKING_FAILURE` | Random failure | A demo video needs the failure to fire on cue; randomness is unrecordable |
 | D11 | 2026-08-23 | `update_lead_profile` exposed as a model tool | Post-hoc extraction only | Forces the model to commit to what it believes it learned, making memory failures visible in the tool trace instead of silent |
 | D12 | 2026-08-23 | Noto Sans Devanagari second in the font stack | A single Latin family | Plus Jakarta Sans has no Devanagari glyphs; without the fallback every Hindi reply renders as tofu boxes and F-02 fails on camera |
+| D13 | 2026-08-24 | `google-genai` (Gemini) instead of `anthropic` (Claude) — **supersedes D9** | Stay on Anthropic and wait for the user's billing to clear | User's explicit choice, made after the Anthropic test account hit a real billing block mid-Phase-2 (not a code defect — see the 2026-08-24 02:15 log entry). `gemini-2.5-flash` (chat) / `gemini-2.5-pro` (analytics) replace `claude-opus-5`; `thinking_config.thinking_level` replaces `output_config.effort`; explicit caching is dropped for v1 rather than reimplemented against Gemini's separate stateful cache resource |
 
 ---
 

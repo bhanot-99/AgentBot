@@ -54,10 +54,10 @@
 ├────────────────────────────────┼──────────────────────────────────────────┤
 │  INFRASTRUCTURE                                                           │
 │   SessionStore (Protocol) ──▶ InMemorySessionStore   [Redis-ready]        │
-│   LLMClient    (Protocol) ──▶ AnthropicClient        [provider-swappable] │
+│   LLMClient    (Protocol) ──▶ GeminiClient           [provider-swappable] │
 └────────────────────────────────┼──────────────────────────────────────────┘
                                  ▼
-                        Claude API — claude-opus-5
+                        Gemini API — gemini-2.5-flash / gemini-2.5-pro
 ```
 
 **Why layered this way:** the Forward Deployed Engineer reality is that a customer will want to
@@ -218,11 +218,13 @@ the assignment asks for, always in sync with what the code actually sends.
 guardrails. Guardrails sit last because recency matters, and the channel adapter sits after them
 because it is the narrowest, most format-specific instruction.
 
-**Caching:** modules `00`–`71` are byte-stable for a given channel, so they form the cached prefix
-(`cache_control: {"type": "ephemeral"}`). Volatile per-turn state (current lead profile, today's
-date, booking window) goes in a **second** system block *after* the cache breakpoint, so it never
-invalidates the cache. Render order is `tools` → `system` → `messages`; the tool list is therefore
-constructed once at import time and never reordered.
+**Caching:** modules `00`–`71` are byte-stable for a given channel — under the original Anthropic
+design this formed an inline cached prefix (`cache_control: {"type": "ephemeral"}`), sent fresh but
+priced once. Gemini's caching is a separate stateful resource (`client.aio.caches.create`, TTL-
+bound) rather than an inline per-request flag; explicit caching is **not used in v1** (rules.md
+A15) given the 24-hour build scope, so the composed system prompt plus volatile per-turn state
+(current lead profile, today's date, booking window) is sent as one `system_instruction` string
+every turn. The tool list is still built once at import time and never reordered.
 
 ---
 
@@ -264,7 +266,7 @@ AgentBot/
 ├── design.md                       Colour, type, spacing, components
 ├── memory.md                       Live state tracker — updated every phase
 │
-├── .env.example                    ANTHROPIC_API_KEY= (empty) + tunables
+├── .env.example                    GEMINI_API_KEY= (empty) + tunables
 ├── .gitignore                      .env, __pycache__, .venv, *.log
 ├── requirements.txt                6 production deps + 3 dev deps
 │
@@ -282,15 +284,15 @@ AgentBot/
 │   │
 │   ├── agent/
 │   │   ├── __init__.py
-│   │   ├── prompt_builder.py       Compose modules + facts → system prompt (cached)
+│   │   ├── prompt_builder.py       Compose modules + facts → system prompt
 │   │   ├── orchestrator.py         Turn loop, tool dispatch, error recovery
 │   │   ├── tools.py                Tool schemas + dispatch table + side effects
-│   │   └── analytics.py            Transcript → ConversationAnalytics (messages.parse)
+│   │   └── analytics.py            Transcript → ConversationAnalytics (response_schema)
 │   │
 │   ├── llm/
 │   │   ├── __init__.py
 │   │   ├── base.py                 LLMClient Protocol
-│   │   └── anthropic_client.py     Anthropic SDK impl: retries, timeouts, caching, usage
+│   │   └── gemini_client.py        google-genai SDK impl: retries, timeouts, usage
 │   │
 │   ├── services/
 │   │   ├── __init__.py
@@ -347,29 +349,28 @@ AgentBot/
 | Server | Uvicorn | FastAPI's reference server; one command to run everything |
 | Validation | Pydantic v2 | Request/response contracts **and** the analytics output schema |
 | Config | pydantic-settings | Typed env loading; single place env vars are read |
-| LLM SDK | `anthropic` (official) | First-party SDK: typed errors, retries, prompt caching, `messages.parse` |
+| LLM SDK | `google-genai` (official) | First-party SDK: typed errors, `response_schema` structured output, function calling |
 | Facts file | PyYAML | Human-editable knowledge base a non-engineer can review |
 
 ### Model configuration
 
 | Setting | Value | Rationale |
 |---|---|---|
-| `CHAT_MODEL` | `claude-opus-5` | Best instruction-following under the adversarial pressure this prompt faces; the anti-hallucination requirement is the whole assignment |
-| Chat `output_config.effort` | `low` | Conversational turns need speed, not deliberation. Lowers latency and cost without changing model — the correct lever on Opus 5 |
-| Chat `thinking` | omitted (adaptive default) | Thinking is on by default on Opus 5. We do **not** set `{"type":"disabled"}` — disabled thinking on Opus 5 can emit tool calls as visible text and leak internal tags |
-| `max_tokens` (chat) | `1024` | Turns are capped at 60 words. Deliberately short output |
-| `ANALYTICS_MODEL` | `claude-opus-5` | Same model; extraction quality matters more than cost on one call per session |
-| Analytics `effort` | `medium` | Structured extraction over a full transcript benefits from more deliberation than a chat turn |
-| `max_tokens` (analytics) | `4096` | Full structured record |
-| Timeout | 30 s chat / 60 s analytics | Bounded turn latency; SDK default of 10 min is far too permissive for a chat UI |
-| Retries | SDK default (2) | Handles 429/5xx/connection errors with backoff |
+| `CHAT_MODEL` | `gemini-2.5-flash` | Fast, cheap, strong instruction-following for conversational turns; verify current availability before relying on this default (rules.md A1) |
+| Chat `thinking_config.thinking_level` | `low` | Conversational turns need speed, not deliberation |
+| `max_output_tokens` (chat) | `1024` | Turns are capped at 60 words. Deliberately short output |
+| `ANALYTICS_MODEL` | `gemini-2.5-pro` | Higher-capability model; extraction quality matters more than cost on one call per session |
+| Analytics `thinking_config.thinking_level` | `medium` | Structured extraction over a full transcript benefits from more deliberation than a chat turn |
+| `max_output_tokens` (analytics) | `4096` | Full structured record |
+| Timeout | 30 s chat / 60 s analytics, via `http_options.timeout` (ms) | Bounded turn latency; the SDK has no chat-appropriate default |
+| Retries | explicit `http_options.retry_options=HttpRetryOptions(attempts=3)` | `google-genai` does not retry by default, unlike the Anthropic SDK used previously — this must be set, not assumed |
 
 Both model IDs are environment variables. A customer who wants a cheaper or faster tier changes
 `.env`, not code.
 
-**Explicitly not used:** `budget_tokens` (removed on Opus 5 — returns 400), assistant prefill
-(returns 400 on Opus 5), `temperature`/`top_p` (removed on Opus 5), streaming (deferred),
-compaction (sessions never approach the context window), server tools, MCP.
+**Explicitly not used in v1:** `temperature`/`top_p`/`top_k` (thinking level is the tuning lever
+instead), streaming (deferred), explicit context caching (rules.md A15 — a documented
+simplification, not an oversight), compaction (sessions never approach the context window).
 
 ### Frontend
 
@@ -448,10 +449,10 @@ Base: `/api`. All responses are JSON. All errors use one envelope.
 
 | Failure | Handling |
 |---|---|
-| `RateLimitError` | SDK backoff; on final failure → 502 + in-language "one moment, technical issue" reply |
-| `APIStatusError` ≥ 500 | SDK retries; then degraded reply + auto-escalate + `follow_up_required = true` |
-| `APIConnectionError` / `APITimeoutError` | Same degraded path. The customer is never shown a stack trace or an English error in a Hindi conversation |
-| `AuthenticationError` | Fail fast at startup with a clear message naming `ANTHROPIC_API_KEY` — not on the first user message |
+| `ClientError` (`.status == "RESOURCE_EXHAUSTED"`) | Explicit retry (rules.md A12); on final failure → 502 + in-language "one moment, technical issue" reply |
+| `ServerError` / other `ClientError` | Explicit retries via `retry_options`; then degraded reply + auto-escalate + `follow_up_required = true` |
+| `(httpx.TimeoutException, httpx.ConnectError, httpx2.TimeoutException, httpx2.ConnectError)` | Same degraded path. The customer is never shown a stack trace or an English error in a Hindi conversation |
+| `ClientError` (`.status` `"UNAUTHENTICATED"`/`"PERMISSION_DENIED"`) | Fail fast at startup with a clear message naming `GEMINI_API_KEY` — not on the first user message. Note: an invalid key returns `.status == "INVALID_ARGUMENT"` (code 400), not an auth-specific status — verified live, not assumed |
 | Tool raises | Caught in dispatch → `tool_result` with `is_error: true` + recovery hint. The conversation continues |
 | Booking failure | A **domain outcome**, not an exception. Structured `{ok:false, error_code}`. F-10 |
 | Iteration cap hit | Graceful close, `escalated_to_human = true`, logged as an anomaly |
@@ -473,7 +474,7 @@ in every log line.** Prompts and full transcripts are never logged at INFO.
 ```
 Session
   id · channel · created_at · ended_at · language_hint
-  messages: list[MessageParam]          # exact Anthropic wire format, replayed verbatim
+  messages: list[dict]                  # exact Gemini Content wire format, replayed verbatim
   lead: LeadProfile
   tool_events: list[ToolEvent]
   stage: Stage
@@ -492,12 +493,13 @@ BookingResult
   ok · reference · date · slot · error_code · message · alternatives[]
 
 ConversationAnalytics
-  … PRD §7, as a Pydantic model used directly as `output_format` for messages.parse()
+  … PRD §7, as a Pydantic model passed as `response_schema`, read from `response.parsed`
 ```
 
-`Session.messages` stores Anthropic content blocks verbatim, including `tool_use` and
-`tool_result` blocks. Rewriting them into a bespoke internal format and back is the classic source
-of tool-loop corruption; we do not do it.
+`Session.messages` stores Gemini `Content` blocks verbatim (`role: "user"|"model"`, `parts: [...]`),
+including `function_call` and `function_response` parts once Phase 3 adds tools. Rewriting them
+into a bespoke internal format and back is the classic source of tool-loop corruption; we do not
+do it.
 
 ---
 
@@ -507,7 +509,7 @@ of tool-loop corruption; we do not do it.
   first commit; `.env.example` carries empty values. No key is ever logged or returned.
 - **PII:** names and phone numbers stay in process memory for the session lifetime (2-hour TTL,
   then swept). Phones are masked in logs. The only third party that sees conversation content is
-  Anthropic — disclosed in the README.
+  Google (Gemini API) — disclosed in the README.
 - **Input hardening:** 2000-char cap, per-session token-bucket rate limit, JSON-only bodies.
 - **Prompt injection:** customer text is only ever a `user` message — never concatenated into the
   system prompt. Operator instructions never travel through user content.
@@ -551,7 +553,7 @@ reproducible and auditable. The runner writes **input · expected behaviour · a
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env      # add ANTHROPIC_API_KEY
+cp .env.example .env      # add GEMINI_API_KEY
 uvicorn app.main:app --reload --port 8000
 # → http://localhost:8000        UI
 # → http://localhost:8000/docs   OpenAPI
@@ -576,3 +578,4 @@ restart — correct for a demo, and the `SessionStore` Protocol is the documente
 | D8 | Two model calls per session (chat + analytics) | One call doing both | Separation keeps the chat prompt free of extraction instructions that would leak into conversation |
 | D9 | `effort: low` for chat, not a smaller model | Downgrade to a faster tier | Keeps the strongest instruction-following for the anti-hallucination requirement; effort is the correct latency lever |
 | D10 | Failure injection via env + tool input | Random failures | A demo video needs failure **on cue**; randomness is unrecordable |
+| D13 | `google-genai` (Gemini) instead of `anthropic` (Claude) | Stay on Anthropic | User's explicit choice after the Anthropic test account hit a billing block mid-Phase-2; `LLMClient` was the designed-for swap seam. Fixed a real bug in the same change: the Protocol previously leaked Anthropic-specific types into its signature instead of being genuinely provider-neutral |

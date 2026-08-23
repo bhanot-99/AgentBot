@@ -1,6 +1,6 @@
 from typing import Any, Protocol, TypeVar
 
-from anthropic.types import Message, TextBlockParam
+from google.genai.types import GenerateContentResponse
 from pydantic import BaseModel
 
 T = TypeVar("T", bound=BaseModel)
@@ -12,10 +12,10 @@ class LLMClient(Protocol):
     async def complete(
         self,
         *,
-        system: list[TextBlockParam],
+        system: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
-    ) -> Message: ...
+    ) -> GenerateContentResponse: ...
 
     async def parse(
         self,

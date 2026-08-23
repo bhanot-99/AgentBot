@@ -33,7 +33,7 @@ async def create_session(
     greeting = _greeting(body.channel)
 
     session = Session(id=str(uuid.uuid4()), channel=body.channel, created_at=now)
-    session.messages.append({"role": "assistant", "content": [{"type": "text", "text": greeting}]})
+    session.messages.append({"role": "model", "parts": [{"text": greeting}]})
     await store.create(session)
 
     return SessionCreateResponse(

@@ -67,8 +67,9 @@ class Session(BaseModel):
     created_at: datetime
     ended_at: datetime | None = None
     language_hint: str | None = None
-    # Anthropic content blocks, stored verbatim and replayed as-is (rules.md A10) — never
-    # rewritten into a bespoke format, which is the standard cause of tool-loop corruption.
+    # Gemini Content blocks (role: "user"|"model", parts: [...]), stored verbatim and replayed
+    # as-is (rules.md A9) — never rewritten into a bespoke format, the standard cause of
+    # tool-loop corruption.
     messages: list[dict[str, Any]] = Field(default_factory=list)
     lead: LeadProfile = Field(default_factory=LeadProfile)
     tool_events: list[ToolEvent] = Field(default_factory=list)

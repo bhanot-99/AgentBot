@@ -5,22 +5,24 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-import anthropic
+import httpx
+import httpx2
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from google.genai import errors as genai_errors
 
 from app.api import chat, session
 from app.config import get_settings
-from app.llm.anthropic_client import AnthropicLLMClient
+from app.llm.gemini_client import GeminiLLMClient
 from app.models import ErrorDetail, ErrorEnvelope
 from app.store.memory_store import InMemorySessionStore
 
 logger = logging.getLogger(__name__)
 
-# Masks a trailing phone number in a log message to its last four digits (rules.md A15).
+# Masks a trailing phone number in a log message to its last four digits (rules.md A14).
 _PHONE_RE = re.compile(r"(?<!\d)(\d{6,})(\d{4})(?!\d)")
 
 
@@ -51,7 +53,7 @@ def configure_logging(level: str) -> None:
     root.setLevel(level)
 
 
-# Reading settings at import time is the fail-fast point: a missing ANTHROPIC_API_KEY
+# Reading settings at import time is the fail-fast point: a missing GEMINI_API_KEY
 # stops the process here with one named-variable message, before uvicorn ever binds a port.
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -60,8 +62,8 @@ configure_logging(settings.log_level)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.session_store = InMemorySessionStore(ttl_minutes=settings.session_ttl_minutes)
-    app.state.llm_client = AnthropicLLMClient(
-        api_key=settings.anthropic_api_key,
+    app.state.llm_client = GeminiLLMClient(
+        api_key=settings.gemini_api_key,
         chat_model=settings.chat_model,
         analytics_model=settings.analytics_model,
     )
@@ -109,9 +111,9 @@ async def handle_http_exception(request: Request, exc: HTTPException) -> JSONRes
     return _error_response(exc.status_code, code, str(exc.detail))
 
 
-@app.exception_handler(anthropic.APIConnectionError)
-async def handle_llm_connection_error(
-    request: Request, exc: anthropic.APIConnectionError
+@app.exception_handler(httpx.TransportError)
+async def handle_llm_connection_error_httpx(
+    request: Request, exc: httpx.TransportError
 ) -> JSONResponse:
     logger.error("llm unavailable (connection): %s", exc)
     return _error_response(
@@ -121,14 +123,35 @@ async def handle_llm_connection_error(
     )
 
 
-@app.exception_handler(anthropic.APIStatusError)
-async def handle_llm_status_error(request: Request, exc: anthropic.APIStatusError) -> JSONResponse:
-    logger.error("llm unavailable: status=%s request_id=%s", exc.status_code, exc.request_id)
+@app.exception_handler(httpx2.TransportError)
+async def handle_llm_connection_error_httpx2(
+    request: Request, exc: httpx2.TransportError
+) -> JSONResponse:
+    logger.error("llm unavailable (connection): %s", exc)
     return _error_response(
         502,
         "llm_unavailable",
         "The assistant is temporarily unavailable. Please try again shortly.",
-        request_id=exc.request_id,
+    )
+
+
+@app.exception_handler(genai_errors.ClientError)
+async def handle_llm_client_error(request: Request, exc: genai_errors.ClientError) -> JSONResponse:
+    logger.error("llm unavailable: status=%s message=%s", exc.status, exc.message)
+    return _error_response(
+        502,
+        "llm_unavailable",
+        "The assistant is temporarily unavailable. Please try again shortly.",
+    )
+
+
+@app.exception_handler(genai_errors.ServerError)
+async def handle_llm_server_error(request: Request, exc: genai_errors.ServerError) -> JSONResponse:
+    logger.error("llm unavailable: status=%s message=%s", exc.status, exc.message)
+    return _error_response(
+        502,
+        "llm_unavailable",
+        "The assistant is temporarily unavailable. Please try again shortly.",
     )
 
 
