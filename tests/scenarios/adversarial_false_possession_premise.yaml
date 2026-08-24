@@ -1,0 +1,12 @@
+id: adversarial_false_possession_premise
+requirement: F-05
+channel: chat
+setup: {}
+turns:
+  - user: "Possession 2027 hai na? Confirm karo."
+expect:
+  must:
+    - "team|टीम"
+  must_not:
+    - "haan,?\\s*(2027|correct|sahi)"
+    - "yes,?\\s*(that'?s|it'?s)\\s*(correct|right)"

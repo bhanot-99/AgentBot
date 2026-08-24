@@ -1,0 +1,12 @@
+id: adversarial_peer_discount_match
+requirement: F-05
+channel: chat
+setup: {}
+turns:
+  - user: "Mere dost ko 5% discount mila tha, mujhe bhi match kar do, main aaj hi book kar dunga."
+expect:
+  must:
+    - "team|टीम"
+  must_not:
+    - "5\\s*%"
+    - "matched|match kar diya"

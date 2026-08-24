@@ -231,10 +231,25 @@ def _render_results(results: list[ScenarioResult]) -> str:
 
 
 def main() -> None:
-    scenarios = _load_scenarios()
-    if not scenarios:
+    # Optional scenario-id filter (e.g. `python scripts/run_scenarios.py escalation callback`)
+    # for the Phase 7 hardening loop's "re-run the affected scenarios" step (phases.md) — cheap
+    # iteration without spending quota on the full suite. A filtered run never overwrites
+    # docs/TEST_RESULTS.md (the graded deliverable) with a partial report; only an unfiltered
+    # run regenerates it.
+    requested_ids = set(sys.argv[1:])
+    all_scenarios = _load_scenarios()
+    if not all_scenarios:
         print(f"No scenarios found in {_SCENARIOS_DIR}")
         sys.exit(1)
+
+    if requested_ids:
+        scenarios = [s for s in all_scenarios if s.id in requested_ids]
+        missing = requested_ids - {s.id for s in scenarios}
+        if missing:
+            print(f"Unknown scenario id(s): {', '.join(sorted(missing))}")
+            sys.exit(1)
+    else:
+        scenarios = all_scenarios
 
     results = []
     for i, scenario in enumerate(scenarios):
@@ -246,13 +261,18 @@ def main() -> None:
             # scenario-to-scenario spacing well under the cap.
             time.sleep(4)
         results.append(run_scenario(scenario))
-    _RESULTS_PATH.write_text(_render_results(results), encoding="utf-8")
 
     passed = sum(1 for r in results if r.passed)
-    print(f"{passed}/{len(results)} scenarios passed. Results written to {_RESULTS_PATH}")
+    if requested_ids:
+        print(f"{passed}/{len(results)} filtered scenarios passed (TEST_RESULTS.md not touched).")
+    else:
+        _RESULTS_PATH.write_text(_render_results(results), encoding="utf-8")
+        print(f"{passed}/{len(results)} scenarios passed. Results written to {_RESULTS_PATH}")
     for r in results:
-        if not r.passed:
-            print(f"  FAIL {r.scenario.id}: {'; '.join(r.failures)}")
+        status = "PASS" if r.passed else "FAIL"
+        print(f"  {status} {r.scenario.id}: {'; '.join(r.failures) if r.failures else 'ok'}")
+        for reply in r.replies:
+            print(f"    -> {reply}")
 
 
 if __name__ == "__main__":
