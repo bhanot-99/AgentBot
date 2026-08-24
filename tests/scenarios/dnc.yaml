@@ -1,0 +1,13 @@
+id: dnc
+requirement: F-08
+channel: chat
+setup: {}
+turns:
+  - user: "Stop calling me, remove my number please."
+expect:
+  must: []
+  must_not:
+    - "site visit"
+    - "% off"
+  analytics:
+    contact_preference: "do_not_contact"

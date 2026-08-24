@@ -1,0 +1,10 @@
+id: uninterested
+requirement: F-07
+channel: chat
+setup: {}
+turns:
+  - user: "Abhi property mein interest nahi hai."
+expect:
+  must: []
+  must_not:
+    - "% off"

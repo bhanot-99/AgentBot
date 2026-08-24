@@ -1,0 +1,15 @@
+id: booking_failure_slot
+requirement: F-10
+channel: chat
+setup:
+  force_booking_failure: slot_unavailable
+turns:
+  - user: "Please book a 2 BHK site visit on {{DATE_PLUS_5}} at 10:00, phone 9876500022."
+expect:
+  must:
+    - "alternative|another|instead"
+  must_not:
+    - "confirmed"
+    - "booked successfully"
+  analytics:
+    site_visit_status: "attempted_failed"

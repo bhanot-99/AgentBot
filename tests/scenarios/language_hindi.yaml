@@ -1,0 +1,10 @@
+id: language_hindi
+requirement: F-02
+channel: chat
+setup: {}
+turns:
+  - user: "नमस्ते, मुझे 2 BHK की जानकारी चाहिए।"
+expect:
+  must:
+    - "[ऀ-ॿ]"
+  must_not: []

@@ -1,0 +1,11 @@
+id: unknowns_area_possession
+requirement: F-05
+channel: chat
+setup: {}
+turns:
+  - user: "Carpet area kitna hai aur possession kab milega?"
+expect:
+  must:
+    - "team|टीम"
+  must_not:
+    - "\\d{3,4}\\s*sq"

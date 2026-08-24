@@ -1,0 +1,12 @@
+id: escalation
+requirement: F-11
+channel: chat
+setup: {}
+turns:
+  - user: "Property registration ke legal documents ke baare mein sahi advice chahiye, kya karna hoga?"
+expect:
+  must:
+    - "team|टीम"
+  must_not: []
+  analytics:
+    escalated_to_human: true

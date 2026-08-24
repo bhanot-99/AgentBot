@@ -171,6 +171,11 @@ def _to_gemini_contents(messages: list[dict[str, Any]]) -> list[types.Content]:
 
 def _to_llm_response(response: types.GenerateContentResponse) -> LLMResponse:
     candidate = response.candidates[0]
+    # A truncated or safety-blocked candidate can have content=None or parts=None with no
+    # text and no tool call at all (finish_reason MAX_TOKENS/SAFETY/RECITATION) — caught live
+    # during a scenario run, not by inspection. Treat it as an empty, textless turn rather
+    # than crashing the whole request with "NoneType is not iterable".
+    parts = candidate.content.parts if candidate.content else None
     tool_calls = [
         ToolCallRequest(
             id=part.function_call.id or part.function_call.name,
@@ -180,7 +185,7 @@ def _to_llm_response(response: types.GenerateContentResponse) -> LLMResponse:
             if part.thought_signature
             else {},
         )
-        for part in candidate.content.parts
+        for part in (parts or [])
         if part.function_call
     ]
     usage_metadata = response.usage_metadata

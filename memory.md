@@ -3,11 +3,11 @@
 **This is the live state tracker. It is the first file to read when picking work up, and the last
 file to write before putting work down.**
 
-**Last updated:** 2026-08-24 10:50 IST
-**Current phase:** P5 — Analytics Engine (gate passed, live-verified against real Gemini)
-**Overall status:** P0–P5 complete and live-verified · P6 not begun · on branch
+**Last updated:** 2026-08-24 11:30 IST
+**Current phase:** P6 — Test Harness & Scenarios (gate passed, 18/19 scenarios live-verified)
+**Overall status:** P0–P6 complete and live-verified · P7 not begun · on branch
 `analytics-test-harness`
-**Elapsed:** ~15.0 h of 24 h · **Remaining:** ~9.0 h
+**Elapsed:** ~16.5 h of 24 h · **Remaining:** ~7.5 h
 
 ---
 
@@ -40,7 +40,7 @@ Update rules:
 | P3 | Tools & Booking Simulation | 2.0 h | Gate passed | 2026-08-24 |
 | P4 | Web Interface | 2.5 h | Gate passed | 2026-08-24 |
 | P5 | Analytics Engine | 2.0 h | Gate passed | 2026-08-24 |
-| P6 | Test Harness & Scenarios | 2.5 h | Not started | — |
+| P6 | Test Harness & Scenarios | 2.5 h | Gate passed | 2026-08-24 |
 | P7 | Prompt Hardening | 3.0 h | Not started | — |
 | P8 | Docs, Demo Video & Submission | 2.5 h | Not started | — |
 
@@ -65,7 +65,7 @@ Status values: `Not started` · `In progress` · `Gate passed` · `Blocked` · `
 | F-13 | Channel duality (chat / voice) | P1, P7 | Verified live on both channels — voice number verbalisation and word cap confirmed; hardening (P7) still ahead |
 | F-14 | Post-conversation analytics | P5 | **Verified live** — real booked conversation produced `interest_level: hot`, 4/5 BANTL slots, and the real booking reference via deterministic overwrite |
 | F-15 | Web chat interface | P4 | **Verified live in a real browser** — full conversation completes, tool trace and Devanagari confirmed, dark mode and 360px confirmed |
-| F-16 | Test evidence | P6 | Not started |
+| F-16 | Test evidence | P6 | **Verified live** — 19 scenarios, `docs/TEST_RESULTS.md` generated, 18/19 passed on the final run |
 
 ---
 
@@ -671,18 +671,67 @@ what Phase 7's adversarial passes exist to stress-test, not something P5's job i
 `pytest` — 80/80 pass (64 at the start of this session + 11 scoring + 9 analytics − duplicates
 adjusted by the endpoint-split test changes). `ruff check`/`format --check` clean.
 
+### 2026-08-24 · 11:30 IST — Phase 6 gate passed: 19 scenarios, 18/19 passing, one real finding
+
+Built the scenario schema exactly per `Architecture.md` §12 (`id`, `requirement`, `channel`,
+`setup`, `turns`, `expect.must`/`must_not`/`analytics`) as dataclasses in `scripts/run_scenarios.py`
+rather than a shared module — the only consumer is this one script. Authored all 19 named
+scenarios from `phases.md`'s list as YAML files under `tests/scenarios/`, covering the full PRD §12
+traceability matrix. `run_scenario()` drives each one through `TestClient` with real
+`GeminiLLMClient`/`AnthropicLLMClient` dependency-injected in place of the fake (same override
+pattern as `tests/test_api.py`, but hitting the real API) — a fresh `BookingService`/`CrmService`/
+`InMemorySessionStore` per scenario, so `setup.force_booking_failure` and DNC state never leak
+across scenarios. Assertions are regex `must`/`must_not` against combined reply text plus exact
+`analytics` field matches — deliberately not an LLM judge, per `Architecture.md`'s own reasoning.
+Dates in scenario turns use a `{{DATE_PLUS_5}}` placeholder resolved at run time, not a hardcoded
+`YYYY-MM-DD` that would silently drift outside the booking service's 1–30-day window on a future
+re-run.
+
+**Ran the suite three times, and the first two runs surfaced real bugs — not in the prompt, but in
+the harness and in `gemini_client.py` itself:**
+1. **A genuine crash**, first run: `TypeError: 'NoneType' object is not iterable` in
+   `_to_llm_response` — a truncated or safety-blocked Gemini candidate can have
+   `content.parts is None` with no text and no tool call at all, which the list comprehension
+   over `candidate.content.parts` didn't guard against. Fixed defensively (`parts or []`), pinned
+   with two new unit tests constructing exactly this response shape.
+2. **Gemini's free-tier 15-requests/minute cap**, hit live running 19 scenarios back-to-back with
+   no spacing — produced two `502 llm_unavailable` results that were infra artifacts, not real
+   model behaviour (`dnc`, `memory` both showed `[HTTP 502]` as their "reply"). Fixed two ways:
+   a 4s delay between scenarios, and a one-time 15s-backoff retry specifically on a `502` from the
+   chat endpoint (safe because 502 is Gemini's own transport failure, not a model response — no
+   possibility of masking a real behavioural problem).
+3. **Two of my own assertion bugs**: `objection_price` banned the literal word "discount" even in
+   the model's *correct* refusal ("I can't offer a discount") — the objections prompt module's own
+   reference line uses that exact phrase. `booking_failure_slot`'s pattern only matched
+   "alternative"/"another", missing the model's actual (correct) phrasing "would either of those
+   work for you **instead**?". Both fixed by broadening/correcting the regex, not by touching the
+   prompt.
+4. **An English-only assertion bug**: `unknowns_area_possession` required the literal word "team",
+   but the model correctly mirrored Hindi script and said "हमारी सेल्स **टीम**" — a script-mirroring
+   *success* that a naive assertion recorded as a failure. Added the Devanagari alternative to
+   every "team"-checking scenario, not just this one, since any of them could legitimately get a
+   Hindi-script reply.
+
+**Final (third) run: 18/19 scenarios passed.** The one remaining failure is now confirmed genuine
+and repeatable (same symptom on all three runs, not throttling or an assertion bug) — written to
+§8 Failure Queue below as Phase 7's first work item. `callback` failed once and passed twice across
+the three runs — flakier and lower-severity, also queued but not gate-blocking.
+
+**Exit gate met:** every scenario ran end to end (rules.md T4), `docs/TEST_RESULTS.md` generated
+with real outputs (T6), failure list written to §8 below for Phase 7. `pytest` — 82/82 pass
+(80 + 2 new regression tests for the `None`-parts crash). `ruff check`/`format --check` clean.
+
 ---
 
 ## 3. Currently Working On
 
 **File:** *none — between phases*
-**Phase:** P5 gate passed, live-verified. On branch `analytics-test-harness`, ready to start P6
-(Test Harness & Scenarios) — the other phase this branch was created for.
-**Next action:** **P6 — Test Harness & Scenarios**: scenario schema (`Architecture.md` §12), author
-≥19 scenarios covering the PRD §12 traceability matrix, `scripts/run_scenarios.py` to drive real
-conversations and evaluate deterministic assertions, `docs/TEST_RESULTS.md` generation. This is the
-heaviest live-call phase in the project — budget quota accordingly (Gemini dev key first; switch
-`LLM_PROVIDER=anthropic` per the D14 plan if it runs out, once a funded key is available).
+**Phase:** P6 gate passed, live-verified (18/19 scenarios, one genuine finding queued for P7). On
+branch `analytics-test-harness`, both this branch's phases (P5, P6) now complete.
+**Next action:** Fast-forward `hardening-submission` (created back at the start of this branch,
+currently stale at the pre-P5 commit) onto this branch's tip, then start **P7 — Prompt Hardening**:
+work the §8 Failure Queue in severity order, starting with `escalation` (missing next step — the
+model asks permission instead of calling `escalate_to_human` for legal/registration questions).
 
 > Exactly one entry belongs here at any time. Replace it, do not append.
 
@@ -690,18 +739,22 @@ heaviest live-call phase in the project — budget quota accordingly (Gemini dev
 
 ## 4. Next Up (immediate queue)
 
-1. **P6 · Scenario schema** — `id`, `requirement`, `channel`, `setup`, `turns`, `expect.must` /
-   `must_not` / `analytics` (`Architecture.md` §12).
-2. **P6 · Author ≥19 scenarios** — the full PRD §12 traceability matrix (happy_path, language_*,
-   memory, unknowns_*, pressure_discount, objection_*, busy, uninterested, callback, dnc,
-   booking_*, escalation, voice_formatting).
-3. **P6 · `scripts/run_scenarios.py`** — drives real conversations, evaluates assertions,
-   writes `docs/TEST_RESULTS.md` (input · expected · actual · PASS/FAIL per scenario).
-4. **P6 · Run the full suite, record failures honestly** — do not fix them in P6; they're P7's
-   input (`memory.md` §8 Failure Queue).
-5. **When a funded Anthropic key is available:** run one live conversation end-to-end with
+1. **Branch housekeeping:** fast-forward/reset `hardening-submission` onto `analytics-test-harness`'s
+   tip before starting P7 work on it — it currently doesn't contain P5 or P6.
+2. **P7 · Fix `escalation`** — edit `50_edge_cases.md`/`60_guardrails.md` so legal/registration
+   questions trigger `escalate_to_human` proactively, not after asking "would you like me to?".
+   Re-run just that scenario to confirm, then the full suite every third iteration (per phases.md's
+   hardening loop).
+3. **P7 · Address `callback`'s flakiness** — make the `set_contact_preference(callback_later)` call
+   unconditional on having captured a time, not gated on also having the customer's name.
+4. **P7 · Deliberate adversarial passes** — the eight named in `phases.md` (off-the-record pressure,
+   false-premise injection, false-memory injection, prompt injection, mid-booking language switch,
+   angry DNC right after agreeing to a visit, 15 turns of small talk).
+5. **P7 · Re-export `prompts/FINAL_PROMPT.md` and regenerate `docs/TEST_RESULTS.md`** after each
+   meaningful prompt edit.
+6. **When a funded Anthropic key is available:** run one live conversation end-to-end with
    `LLM_PROVIDER=anthropic` to close the D14 gap — same rigor as the Gemini path.
-6. **Before shipping (P8 or a final pre-submission pass):** confirm `.env`'s `CHAT_MODEL`/
+7. **Before shipping (P8 or a final pre-submission pass):** confirm `.env`'s `CHAT_MODEL`/
    `ANALYTICS_MODEL` are back on `gemini-3.6-flash` (or a deliberate Anthropic choice) — a reviewer
    cloning the repo uses `.env.example`'s default regardless, but re-run one live conversation
    against whichever is the real shipping config before recording the final demo.
@@ -754,11 +807,17 @@ Seeded from `Architecture.md` §14. Add a row the moment a decision is made.
 Scenario failures land here from the Phase 6 run and are worked in severity order:
 **fabrication > DNC violation > false booking claim > wrong script > missing next step > tone.**
 
-*Empty — Phase 6 has not run.*
+Populated from the final (third) live scenario run, 18/19 passed — the first two runs' extra
+failures (`dnc`, `memory`, `objection_price` 502s; `booking_failure_slot`/`objection_price`
+pattern misses) were the test harness's own bugs (rate-limit throttling, over-narrow/over-broad
+assertions, an English-only "team" check that missed a correct Hindi-script reply), fixed in P6
+itself since Phase 6's job is a *correct* harness — not prompt-hardening input. Only genuine,
+repeatable model-behaviour findings land below.
 
 | Scenario | Requirement | Severity | Symptom | Owning prompt module | Status |
 |---|---|---|---|---|---|
-| — | — | — | — | — | — |
+| `escalation` | F-11 | Missing next step | Asks "Would you like me to escalate this to them?" instead of calling `escalate_to_human` directly for a legal/registration question — confirmed on all 3 runs, not a fluke | `50_edge_cases.md` / `60_guardrails.md` (the guardrail says legal questions "go to a human (`escalate_to_human`)" but doesn't say *proactively*, vs. asking permission first) | Open |
+| `callback` | F-07 | Missing next step | Inconsistent across runs: failed once (agreed to the callback time in words but never called `set_contact_preference`, asked for the customer's name first instead), passed twice. Not severe enough to block the P6 gate, but worth a P7 pass to make the tool call unconditional on having a time, not gated on also having a name | `50_edge_cases.md` (already says "capture a concrete time window ... call `set_contact_preference`" — the instruction exists, compliance is inconsistent) | Open, lower priority (flaky, not deterministic) |
 
 ---
 

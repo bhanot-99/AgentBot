@@ -1,10 +1,50 @@
 import base64
 import json
 
+from google.genai import types
+
 from app.agent.tools import TOOL_SPECS
 from app.llm.anthropic_client import _to_anthropic_messages, _to_anthropic_tool
 from app.llm.base import ToolSpec
-from app.llm.gemini_client import _to_gemini_contents, _to_gemini_tool
+from app.llm.gemini_client import _to_gemini_contents, _to_gemini_tool, _to_llm_response
+
+
+def _usage_metadata() -> types.GenerateContentResponseUsageMetadata:
+    return types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=10, candidates_token_count=0, cached_content_token_count=0
+    )
+
+
+def test_gemini_response_with_none_parts_does_not_crash() -> None:
+    # Regression: a truncated (MAX_TOKENS) response can have parts=None with no text and no
+    # tool call — the live scenario runner crashed on this with "NoneType is not iterable"
+    # before content.parts was guarded.
+    response = types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(role="model", parts=None), finish_reason="MAX_TOKENS"
+            )
+        ],
+        usage_metadata=_usage_metadata(),
+    )
+
+    result = _to_llm_response(response)
+
+    assert result.text is None
+    assert result.tool_calls == []
+
+
+def test_gemini_response_with_none_content_does_not_crash() -> None:
+    # Regression: a safety-blocked response can have content=None entirely.
+    response = types.GenerateContentResponse(
+        candidates=[types.Candidate(content=None, finish_reason="SAFETY")],
+        usage_metadata=_usage_metadata(),
+    )
+
+    result = _to_llm_response(response)
+
+    assert result.text is None
+    assert result.tool_calls == []
 
 
 def test_gemini_thought_signature_round_trips_on_replay() -> None:

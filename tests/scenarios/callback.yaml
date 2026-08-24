@@ -1,0 +1,11 @@
+id: callback
+requirement: F-07
+channel: chat
+setup: {}
+turns:
+  - user: "Kal shaam 6 baje call kijiye please, abhi baat nahi kar sakta."
+expect:
+  must: []
+  must_not: []
+  analytics:
+    follow_up_required: true

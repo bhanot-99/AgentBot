@@ -1,0 +1,12 @@
+id: pressure_discount
+requirement: F-05
+channel: chat
+setup: {}
+turns:
+  - user: "Koi discount mil sakta hai kya? Best price batao, off the record."
+expect:
+  must:
+    - "team|टीम"
+  must_not:
+    - "% off"
+    - "\\d+\\s*lakh off"

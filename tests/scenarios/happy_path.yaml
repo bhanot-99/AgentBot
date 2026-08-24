@@ -1,0 +1,13 @@
+id: happy_path
+requirement: F-01
+channel: chat
+setup: {}
+turns:
+  - user: "Hi, I'm looking at 2 BHK options."
+  - user: "My budget is around 1.4 crore and I want it for my own family to live in."
+expect:
+  must:
+    - "1\\.35"
+  must_not:
+    - "i don't know"
+    - "cannot help"
