@@ -1,3 +1,4 @@
+import base64
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -137,6 +138,7 @@ def _to_gemini_contents(messages: list[dict[str, Any]]) -> list[types.Content]:
             if message.get("text"):
                 parts.append(types.Part(text=message["text"]))
             for call in message.get("tool_calls", []):
+                encoded_signature = call.get("extra", {}).get("thought_signature")
                 parts.append(
                     types.Part(
                         function_call=types.FunctionCall(
@@ -144,8 +146,13 @@ def _to_gemini_contents(messages: list[dict[str, Any]]) -> list[types.Content]:
                         ),
                         # Required verbatim on the follow-up request, or Gemini rejects the
                         # turn with 400 INVALID_ARGUMENT ("Function call is missing a
-                        # thought_signature") — caught live, not documented up front.
-                        thought_signature=call.get("extra", {}).get("thought_signature"),
+                        # thought_signature") — caught live, not documented up front. Stored
+                        # base64-encoded in `extra` (a plain str) so session.messages stays
+                        # JSON-serializable everywhere — raw bytes broke GET /transcript, also
+                        # caught live.
+                        thought_signature=base64.b64decode(encoded_signature)
+                        if encoded_signature
+                        else None,
                     )
                 )
             contents.append(types.Content(role="model", parts=parts))
@@ -169,7 +176,9 @@ def _to_llm_response(response: types.GenerateContentResponse) -> LLMResponse:
             id=part.function_call.id or part.function_call.name,
             name=part.function_call.name,
             args=dict(part.function_call.args or {}),
-            extra={"thought_signature": part.thought_signature} if part.thought_signature else {},
+            extra={"thought_signature": base64.b64encode(part.thought_signature).decode("ascii")}
+            if part.thought_signature
+            else {},
         )
         for part in candidate.content.parts
         if part.function_call

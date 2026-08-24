@@ -30,9 +30,16 @@ def tool_call_response(
 class FakeLLMClient:
     """Scripted, deterministic LLMClient for Tier 1 tests (rules.md T1) — no network, no key."""
 
-    def __init__(self, script: list[LLMResponse] | None = None) -> None:
+    def __init__(
+        self,
+        script: list[LLMResponse] | None = None,
+        *,
+        parse_script: list[BaseModel | Exception] | None = None,
+    ) -> None:
         self._script = list(script or [])
+        self._parse_script = list(parse_script or [])
         self.calls: list[dict[str, Any]] = []
+        self.parse_calls: list[dict[str, Any]] = []
 
     async def complete(
         self,
@@ -53,4 +60,12 @@ class FakeLLMClient:
         messages: list[dict[str, Any]],
         output_format: type[T],
     ) -> T:
-        raise NotImplementedError("FakeLLMClient.parse is wired in Phase 5 (analytics)")
+        self.parse_calls.append({"system": system, "messages": messages})
+        if not self._parse_script:
+            raise NotImplementedError(
+                "FakeLLMClient.parse has no scripted result — pass parse_script"
+            )
+        result = self._parse_script.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result

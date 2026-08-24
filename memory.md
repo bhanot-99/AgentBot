@@ -3,12 +3,11 @@
 **This is the live state tracker. It is the first file to read when picking work up, and the last
 file to write before putting work down.**
 
-**Last updated:** 2026-08-24 08:40 IST
-**Current phase:** P4 complete · D14 (dual-provider LLM adapter) built ahead of P6, Gemini side
-regression-verified live, Anthropic side wiring-verified (funded key still pending)
-**Overall status:** P0–P4 complete and live-verified · P5 not begun · on branch
+**Last updated:** 2026-08-24 10:50 IST
+**Current phase:** P5 — Analytics Engine (gate passed, live-verified against real Gemini)
+**Overall status:** P0–P5 complete and live-verified · P6 not begun · on branch
 `analytics-test-harness`
-**Elapsed:** ~13.5 h of 24 h · **Remaining:** ~10.5 h
+**Elapsed:** ~15.0 h of 24 h · **Remaining:** ~9.0 h
 
 ---
 
@@ -40,7 +39,7 @@ Update rules:
 | P2 | Agent Core & Chat API | 2.5 h | Gate passed | 2026-08-24 |
 | P3 | Tools & Booking Simulation | 2.0 h | Gate passed | 2026-08-24 |
 | P4 | Web Interface | 2.5 h | Gate passed | 2026-08-24 |
-| P5 | Analytics Engine | 2.0 h | Not started | — |
+| P5 | Analytics Engine | 2.0 h | Gate passed | 2026-08-24 |
 | P6 | Test Harness & Scenarios | 2.5 h | Not started | — |
 | P7 | Prompt Hardening | 3.0 h | Not started | — |
 | P8 | Docs, Demo Video & Submission | 2.5 h | Not started | — |
@@ -64,7 +63,7 @@ Status values: `Not started` · `In progress` · `Gate passed` · `Blocked` · `
 | F-11 | Human escalation | P3 | Implemented and unit-tested (model-invoked and iteration-cap-forced); not yet exercised live |
 | F-12 | Proper conversation ending | P1 | Prompt written (P1) — not yet exercised live |
 | F-13 | Channel duality (chat / voice) | P1, P7 | Verified live on both channels — voice number verbalisation and word cap confirmed; hardening (P7) still ahead |
-| F-14 | Post-conversation analytics | P5 | Not started |
+| F-14 | Post-conversation analytics | P5 | **Verified live** — real booked conversation produced `interest_level: hot`, 4/5 BANTL slots, and the real booking reference via deterministic overwrite |
 | F-15 | Web chat interface | P4 | **Verified live in a real browser** — full conversation completes, tool trace and Devanagari confirmed, dark mode and 360px confirmed |
 | F-16 | Test evidence | P6 | Not started |
 
@@ -597,21 +596,93 @@ must round-trip but doesn't fit the neutral schema — can't regress silently ag
 `pytest` — 53/53 pass (46 existing + 7 new in `tests/test_llm_clients.py`). `ruff check`/
 `format --check` clean.
 
+### 2026-08-24 · 10:50 IST — Phase 5 gate passed: analytics engine live-verified
+
+Built the full PRD §7 schema as two models in `app/models.py`: `ExtractedAnalytics` (the subset
+the model is asked to infer — deliberately excludes every field the code already knows for
+certain, so the model's attention isn't wasted guessing fields we'd discard anyway) and
+`ConversationAnalytics` (the full persisted/returned record, a superset). New enums for every
+PRD §7 field (`Language`, `BudgetFit`, `Timeline`, `Objection` — the twelve from
+`40_objections.md`, same canonical names — etc.). Kept `sentiment` and `unknown_questions_asked`
+rather than taking phases.md's named descope, since there was no time pressure forcing the cut and
+the brief names both explicitly.
+
+`app/agent/analytics.py` — `AnalyticsExtractor.extract()`: renders the transcript + tool-event log,
+calls `llm.parse(output_format=ExtractedAnalytics)` (already provider-neutral post-D14 — works
+under Gemini or Anthropic unchanged), one retry on failure then a partial record with
+`summary = "Analytics extraction failed"` (never fabricated, phases.md P5 task 6), then
+`_assemble_record()` merges in the deterministic fields from the tool-event log and session state
+(decision D6): `site_visit_status`/`site_visit_date`/`site_visit_slot`/`booking_reference` derived
+from `book_site_visit`/`check_slot_availability` tool events (a `DECLINED` vs `NOT_DISCUSSED`
+distinction inferred from whether availability was ever checked — an extension beyond the six
+fields phases.md named, justified by staying consistent with the same trustworthy source),
+`escalated_to_human`/`escalation_reason` from `escalate_to_human` events (reason read from the
+tool's own input, not the model's summary — more trustworthy than either), `contact_preference`
+from `session.contact_preference`, `turn_count`/`duration_seconds` computed directly.
+
+`app/services/scoring.py` — `score_lead()`: hot/warm/cold classification following PRD §7's literal
+rules, plus an independent 0–100 weighted score for sorting within a bucket (design.md §5.8's score
+meter). **A real logic bug caught by my own boundary tests, not shipped**: the first draft checked
+the HOT conditions before the COLD overrides, so a customer who stated a great budget then said
+"stop contacting me" in the same conversation would score HOT — a DNC request must always win
+regardless of any other signal. Fixed by checking hard cold overrides (DNC, budget below range,
+explicit disinterest) first.
+
+Wired `POST /api/session/{id}/end` (idempotent — returns the cached record on repeat calls, no
+extra LLM spend) in `app/api/session.py`, and moved `GET /analytics`/`GET /transcript` into a new
+`app/api/analytics.py` to match `Architecture.md`'s documented split (session.py = lifecycle,
+analytics.py = analytics reads) — I'd initially put all three in session.py and corrected it before
+committing, rather than let the code silently drift from its own architecture doc.
+
+**Two more real bugs caught live, not by inspection:**
+1. `main.py`'s `HTTPException` handler mapped **all** 404s to `"session_not_found"` via a
+   status-code-keyed table — adding `analytics_not_available` as a second 404 cause would have
+   silently mislabeled it. Fixed by using `exc.detail` itself as the code (every call site already
+   raises with the intended code as `detail`), with a separate message lookup.
+2. The D14 `thought_signature` fix (previous log entry) stored raw `bytes` in `session.messages` —
+   harmless for the Gemini SDK round-trip, but `GET /session/{id}/transcript` returns that dict
+   verbatim and FastAPI's default encoder can't serialize non-UTF-8 bytes, 500ing. Fixed by
+   base64-encoding it in `extra` (a plain string) instead, keeping `session.messages` genuinely
+   JSON-safe everywhere, not just patched at the one call site that happened to expose it. Pinned
+   with a new unit test asserting `json.dumps()` never raises on a message containing `extra`.
+
+**Verified live, not just unit-tested** (two real conversations against `gemini-3.1-flash-lite`,
+the dev-quota workaround from Phase 3):
+- Cooperative conversation (name, phone, budget, 2 BHK, timeline, booking in one message) →
+  4/5 BANTL slots filled, `site_visit_status: booked` with the real reference matching the tool
+  output, `interest_level: hot`, `qualification_score: 100` — exceeds the P5 exit gate's ≥4/5
+  requirement.
+- Second conversation (investment purpose, 3 BHK, ₹1.8cr) → correctly inferred
+  `purpose: investment` and `budget_fit: within` (3 BHK starts at ₹1.75cr) — genuine inference,
+  not a restated fact.
+- `GET /analytics` returns the cached record; repeat `POST /end` is idempotent (parse call count
+  stayed at 1 across two calls, confirmed from `fake_llm`-equivalent live log count).
+- `GET /transcript` returns real message/tool-event history after the base64 fix, confirmed via a
+  fresh conversation with a real tool-calling turn.
+- `GET /openapi.json` confirms all five endpoints are registered exactly once, correctly split
+  across the three routers.
+
+**Not live-verified, correctly, because it's a P7 concern, not a P5 one:** the hostile/two-turn
+"no invented budget" exit-gate item is covered by a unit test with a scripted fake response
+(`test_hostile_two_turn_conversation_yields_unknowns_not_invented_facts`) rather than a third live
+call — whether the *real* model actually resists fabricating under adversarial pressure is exactly
+what Phase 7's adversarial passes exist to stress-test, not something P5's job is to prove.
+
+`pytest` — 80/80 pass (64 at the start of this session + 11 scoring + 9 analytics − duplicates
+adjusted by the endpoint-split test changes). `ruff check`/`format --check` clean.
+
 ---
 
 ## 3. Currently Working On
 
 **File:** *none — between phases*
-**Phase:** P4 gate passed. D14 (dual-provider adapter) built and Gemini-side regression-verified
-live; Anthropic side wiring-verified but not yet live-conversation-verified (needs a funded key).
-On branch `analytics-test-harness`, ready to start P5 (Analytics Engine).
-**Next action:** **P5 — Analytics Engine**: `ConversationAnalytics` Pydantic model (PRD §7 field
-set), `app/agent/analytics.py` (extraction prompt + `response_schema`/`output_format` depending on
-active provider, reading the parsed result), the deterministic-overwrite step (D6) from the
-tool-event log, `app/services/scoring.py` (hot/warm/cold + 0–100 score), and wiring
-`POST /api/session/{id}/end` / `GET /api/session/{id}/analytics` / `GET /api/session/{id}/
-transcript` to return the real record — which the P4 analytics panel already knows how to display
-as JSON without any frontend change.
+**Phase:** P5 gate passed, live-verified. On branch `analytics-test-harness`, ready to start P6
+(Test Harness & Scenarios) — the other phase this branch was created for.
+**Next action:** **P6 — Test Harness & Scenarios**: scenario schema (`Architecture.md` §12), author
+≥19 scenarios covering the PRD §12 traceability matrix, `scripts/run_scenarios.py` to drive real
+conversations and evaluate deterministic assertions, `docs/TEST_RESULTS.md` generation. This is the
+heaviest live-call phase in the project — budget quota accordingly (Gemini dev key first; switch
+`LLM_PROVIDER=anthropic` per the D14 plan if it runs out, once a funded key is available).
 
 > Exactly one entry belongs here at any time. Replace it, do not append.
 
@@ -619,21 +690,18 @@ as JSON without any frontend change.
 
 ## 4. Next Up (immediate queue)
 
-1. **P5 · `ConversationAnalytics` model** — full PRD §7 field set with enums.
-2. **P5 · `app/agent/analytics.py`** — extraction prompt, `LLMClient.parse(output_format=
-   ConversationAnalytics)` (already provider-neutral post-D14 — works under either backend
-   unchanged).
-3. **P5 · Deterministic overwrite (D6)** — `site_visit_status`, `booking_reference`,
-   `escalated_to_human`, `contact_preference`, `turn_count`, `duration_seconds` from the tool-event
-   log, never the model.
-4. **P5 · `app/services/scoring.py`** — hot/warm/cold rules, 0–100 score.
-5. **P5 · Wire the three endpoints** — `POST /api/session/{id}/end` (replace the P0 stub),
-   `GET /api/session/{id}/analytics`, `GET /api/session/{id}/transcript`.
-6. **P5 · Failure path** — one retry, then a partial record from deterministic fields only,
-   `summary = "Analytics extraction failed"`, never a fabricated record.
-7. **When a funded Anthropic key is available:** run one live conversation end-to-end with
-   `LLM_PROVIDER=anthropic` to close the one gap D14 left open — same rigor as the Gemini path.
-8. **Before shipping (P8 or a final pre-submission pass):** confirm `.env`'s `CHAT_MODEL`/
+1. **P6 · Scenario schema** — `id`, `requirement`, `channel`, `setup`, `turns`, `expect.must` /
+   `must_not` / `analytics` (`Architecture.md` §12).
+2. **P6 · Author ≥19 scenarios** — the full PRD §12 traceability matrix (happy_path, language_*,
+   memory, unknowns_*, pressure_discount, objection_*, busy, uninterested, callback, dnc,
+   booking_*, escalation, voice_formatting).
+3. **P6 · `scripts/run_scenarios.py`** — drives real conversations, evaluates assertions,
+   writes `docs/TEST_RESULTS.md` (input · expected · actual · PASS/FAIL per scenario).
+4. **P6 · Run the full suite, record failures honestly** — do not fix them in P6; they're P7's
+   input (`memory.md` §8 Failure Queue).
+5. **When a funded Anthropic key is available:** run one live conversation end-to-end with
+   `LLM_PROVIDER=anthropic` to close the D14 gap — same rigor as the Gemini path.
+6. **Before shipping (P8 or a final pre-submission pass):** confirm `.env`'s `CHAT_MODEL`/
    `ANALYTICS_MODEL` are back on `gemini-3.6-flash` (or a deliberate Anthropic choice) — a reviewer
    cloning the repo uses `.env.example`'s default regardless, but re-run one live conversation
    against whichever is the real shipping config before recording the final demo.

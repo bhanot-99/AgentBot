@@ -1,3 +1,6 @@
+import base64
+import json
+
 from app.agent.tools import TOOL_SPECS
 from app.llm.anthropic_client import _to_anthropic_messages, _to_anthropic_tool
 from app.llm.base import ToolSpec
@@ -7,6 +10,9 @@ from app.llm.gemini_client import _to_gemini_contents, _to_gemini_tool
 def test_gemini_thought_signature_round_trips_on_replay() -> None:
     # Regression: the neutral ToolCallRequest shape must preserve Gemini's thought_signature,
     # or the live API rejects the follow-up turn with 400 INVALID_ARGUMENT (caught live).
+    # Stored as a base64 str in `extra`, not raw bytes — a second live bug (GET /transcript
+    # 500ing on non-JSON-serializable bytes) is pinned by the test right below this one.
+    encoded = base64.b64encode(b"opaque-signature-bytes").decode("ascii")
     messages = [
         {
             "role": "assistant",
@@ -16,7 +22,7 @@ def test_gemini_thought_signature_round_trips_on_replay() -> None:
                     "id": "call_1",
                     "name": "check_slot_availability",
                     "args": {"date_str": "2026-09-01"},
-                    "extra": {"thought_signature": b"opaque-signature-bytes"},
+                    "extra": {"thought_signature": encoded},
                 }
             ],
         }
@@ -27,6 +33,26 @@ def test_gemini_thought_signature_round_trips_on_replay() -> None:
     part = contents[0].parts[0]
     assert part.function_call.name == "check_slot_availability"
     assert part.thought_signature == b"opaque-signature-bytes"
+
+
+def test_gemini_tool_call_extra_stays_json_serializable() -> None:
+    # Regression: GET /session/{id}/transcript returns session.messages verbatim as a plain
+    # dict — a raw `bytes` value anywhere inside it 500s (FastAPI's default encoder can't
+    # serialize bytes that aren't valid UTF-8), caught live.
+    message = {
+        "role": "assistant",
+        "text": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "name": "check_slot_availability",
+                "args": {"date_str": "2026-09-01"},
+                "extra": {"thought_signature": base64.b64encode(b"\xff\xfe\x00signature").decode()},
+            }
+        ],
+    }
+
+    json.dumps(message)  # must not raise
 
 
 def test_gemini_missing_thought_signature_defaults_to_none() -> None:

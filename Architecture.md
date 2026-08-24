@@ -432,7 +432,21 @@ Base: `/api`. All responses are JSON. All errors use one envelope.
 // 200 → the full ConversationAnalytics record (PRD §7)
 ```
 
-### `GET /api/session/{id}/analytics` · `GET /api/session/{id}/transcript` · `GET /health`
+### `GET /api/session/{id}/analytics`
+```jsonc
+// 200 → the same cached ConversationAnalytics record end returned; 404 analytics_not_available
+// if the session hasn't been ended yet — a distinct code from session_not_found (both 404)
+```
+
+### `GET /api/session/{id}/transcript`
+```jsonc
+// 200
+{ "session_id": "uuid",
+  "messages": [ /* provider-neutral shape, app/llm/base.py — not raw Gemini/Anthropic wire types */ ],
+  "tool_events": [ { "name": "book_site_visit", "input": {…}, "output": {…}, "ok": true, … } ] }
+```
+
+### `GET /health`
 
 ### Error envelope
 ```jsonc
@@ -445,6 +459,7 @@ Base: `/api`. All responses are JSON. All errors use one envelope.
 |---|---|---|
 | 400 | `invalid_request` | Body fails validation, message > 2000 chars |
 | 404 | `session_not_found` | Unknown or expired session |
+| 404 | `analytics_not_available` | `GET /analytics` called before the session has ended |
 | 409 | `session_ended` | Turn attempted after end |
 | 429 | `rate_limited` | Per-session token bucket exhausted |
 | 502 | `llm_unavailable` | Upstream failed after retries |

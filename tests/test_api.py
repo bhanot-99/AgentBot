@@ -4,10 +4,11 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api import analytics as analytics_module
 from app.api import chat as chat_module
 from app.api import session as session_module
 from app.main import app
-from app.models import ContactPreference
+from app.models import ContactPreference, ExtractedAnalytics
 from app.store.memory_store import InMemorySessionStore
 from tests.fakes import FakeLLMClient
 
@@ -21,8 +22,10 @@ def fake_llm() -> FakeLLMClient:
 def client(fake_llm: FakeLLMClient) -> Iterator[TestClient]:
     store = InMemorySessionStore(ttl_minutes=120)
     app.dependency_overrides[session_module.get_session_store] = lambda: store
+    app.dependency_overrides[session_module.get_llm_client] = lambda: fake_llm
     app.dependency_overrides[chat_module.get_session_store] = lambda: store
     app.dependency_overrides[chat_module.get_llm_client] = lambda: fake_llm
+    app.dependency_overrides[analytics_module.get_session_store] = lambda: store
     try:
         with TestClient(app) as test_client:
             yield test_client
@@ -134,3 +137,66 @@ def test_chat_short_circuits_with_no_llm_call_once_do_not_contact(
     assert response.status_code == 200
     assert "won't be contacted" in response.json()["reply"]
     assert len(fake_llm.calls) == 0
+
+
+def test_end_session_returns_analytics_record(client: TestClient, fake_llm: FakeLLMClient) -> None:
+    session_id = _create_session(client)
+    fake_llm._parse_script.append(ExtractedAnalytics(summary="A cooperative lead."))
+
+    response = client.post(f"/api/session/{session_id}/end")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["session_id"] == session_id
+    assert body["summary"] == "A cooperative lead."
+    assert body["interest_level"] in ("hot", "warm", "cold")
+
+
+def test_end_session_is_idempotent(client: TestClient, fake_llm: FakeLLMClient) -> None:
+    session_id = _create_session(client)
+    fake_llm._parse_script.append(ExtractedAnalytics(summary="first"))
+
+    first = client.post(f"/api/session/{session_id}/end")
+    second = client.post(f"/api/session/{session_id}/end")
+
+    assert first.json() == second.json()
+    assert len(fake_llm.parse_calls) == 1  # second call did not re-extract
+
+
+def test_end_session_unknown_session_is_404(client: TestClient) -> None:
+    response = client.post("/api/session/does-not-exist/end")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "session_not_found"
+
+
+def test_get_analytics_before_end_is_404_with_distinct_code(client: TestClient) -> None:
+    session_id = _create_session(client)
+    response = client.get(f"/api/session/{session_id}/analytics")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "analytics_not_available"
+
+
+def test_get_analytics_after_end_returns_the_cached_record(
+    client: TestClient, fake_llm: FakeLLMClient
+) -> None:
+    session_id = _create_session(client)
+    fake_llm._parse_script.append(ExtractedAnalytics(summary="cached"))
+    client.post(f"/api/session/{session_id}/end")
+
+    response = client.get(f"/api/session/{session_id}/analytics")
+
+    assert response.status_code == 200
+    assert response.json()["summary"] == "cached"
+
+
+def test_get_transcript_returns_messages_and_tool_events(client: TestClient) -> None:
+    session_id = _create_session(client)
+    client.post("/api/chat", json={"session_id": session_id, "message": "Hi"})
+
+    response = client.get(f"/api/session/{session_id}/transcript")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["session_id"] == session_id
+    assert len(body["messages"]) >= 2
+    assert body["tool_events"] == []
