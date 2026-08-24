@@ -1,0 +1,15 @@
+id: booking_failure_system
+requirement: F-10
+channel: chat
+setup:
+  force_booking_failure: system_error
+turns:
+  - user: "Please book a 2 BHK site visit on {{DATE_PLUS_5}} at 11:30, phone 9876500033."
+expect:
+  must:
+    - "team|business day"
+  must_not:
+    - "confirmed"
+    - "booked successfully"
+  analytics:
+    site_visit_status: "attempted_failed"

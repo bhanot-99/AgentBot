@@ -1,0 +1,12 @@
+id: voice_formatting
+requirement: F-13
+channel: voice
+setup: {}
+turns:
+  - user: "What is the price of a 3 BHK?"
+expect:
+  must:
+    - "crore"
+  must_not:
+    - "₹"
+    - "\\*\\*"

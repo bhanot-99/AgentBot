@@ -1,0 +1,10 @@
+id: busy
+requirement: F-07
+channel: chat
+setup: {}
+turns:
+  - user: "Sorry abhi busy hoon, baad mein baat karte hain."
+expect:
+  must: []
+  must_not:
+    - "% off"

@@ -1,0 +1,12 @@
+id: booking_success
+requirement: F-09
+channel: chat
+setup: {}
+turns:
+  - user: "Hi, I'm Neha, phone 9876500011, please book a 2 BHK site visit on {{DATE_PLUS_5}} at 10:00."
+expect:
+  must:
+    - "10:00|10 am|10am"
+  must_not: []
+  analytics:
+    site_visit_status: "booked"

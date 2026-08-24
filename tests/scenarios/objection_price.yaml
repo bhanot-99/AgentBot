@@ -1,0 +1,12 @@
+id: objection_price
+requirement: F-06
+channel: chat
+setup: {}
+turns:
+  - user: "Yeh toh bahut mehnga hai!"
+expect:
+  must:
+    - "team|टीम"
+  must_not:
+    - "% off"
+    - "\\d+\\s*(%|percent)\\s*(off|discount)"

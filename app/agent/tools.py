@@ -3,8 +3,7 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-from google.genai import types
-
+from app.llm.base import ToolSpec
 from app.models import ContactPreference, Session, Stage, ToolEvent
 from app.services.booking import BookingService
 from app.services.crm import CrmService
@@ -28,99 +27,78 @@ _BOOKING_RECOVERY_HINTS = {
     ),
 }
 
-# Five tools (Architecture.md §5), declared per rules.md A5: types.Tool(function_declarations=
-# [...]), each with an explicit `required` list. NOTE: the SDK's local Schema type also accepts
-# `additional_properties`, but the live Gemini API rejects it on tool parameter schemas with
-# "Unknown name additional_properties ... Cannot find field" (400 INVALID_ARGUMENT) — caught by
-# a live call, not by inspection. There is no additionalProperties:false equivalent for Gemini
-# function-calling; `required` is the only closed-schema guard available (rules.md A5).
-TOOLS = types.Tool(
-    function_declarations=[
-        types.FunctionDeclaration(
-            name="update_lead_profile",
-            description=(
-                "Record or update any lead details the customer has revealed, even partially. "
-                "Call this as soon as you learn something new — do not wait to have every field "
-                "before calling it."
-            ),
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "name": types.Schema(type="STRING"),
-                    "phone": types.Schema(
-                        type="STRING", description="10-digit Indian mobile number"
-                    ),
-                    "budget_min_inr": types.Schema(type="INTEGER"),
-                    "budget_max_inr": types.Schema(type="INTEGER"),
-                    "configuration_interest": types.Schema(
-                        type="ARRAY", items=types.Schema(type="STRING")
-                    ),
-                    "primary_configuration": types.Schema(type="STRING"),
-                    "purpose": types.Schema(type="STRING"),
-                    "timeline": types.Schema(type="STRING"),
-                    "decision_authority": types.Schema(type="STRING"),
-                    "location_fit": types.Schema(type="STRING"),
-                    "language_preference": types.Schema(type="STRING"),
-                    "notes": types.Schema(type="ARRAY", items=types.Schema(type="STRING")),
-                    "stage": types.Schema(type="STRING", enum=_STAGE_VALUES),
-                },
-                required=[],
-            ),
+# Five tools (Architecture.md §5), declared as provider-neutral ToolSpecs — each LLMClient
+# implementation (Gemini, Anthropic) translates `properties` (standard JSON Schema) into its own
+# wire format. NOTE: Gemini's live API rejects `additionalProperties` on tool parameter schemas
+# with a 400 ("Unknown name additional_properties ... Cannot find field"), caught by a live call,
+# not by inspection — so `required` is the only closed-schema guard shared across both providers;
+# Anthropic additionally gets `strict: true` + `additionalProperties: false` (rules.md A5).
+TOOL_SPECS = [
+    ToolSpec(
+        name="update_lead_profile",
+        description=(
+            "Record or update any lead details the customer has revealed, even partially. "
+            "Call this as soon as you learn something new — do not wait to have every field "
+            "before calling it."
         ),
-        types.FunctionDeclaration(
-            name="check_slot_availability",
-            description="Look up open site-visit windows for a given date.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={"date_str": types.Schema(type="STRING", description="YYYY-MM-DD")},
-                required=["date_str"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="book_site_visit",
-            description="Attempt to book a site visit for the customer.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "date_str": types.Schema(type="STRING", description="YYYY-MM-DD"),
-                    "slot": types.Schema(type="STRING", description="HH:MM, 24-hour"),
-                    "phone": types.Schema(
-                        type="STRING", description="10-digit Indian mobile number"
-                    ),
-                },
-                required=["date_str", "slot", "phone"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="escalate_to_human",
-            description="Hand the conversation off to a human team member.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "reason": types.Schema(type="STRING"),
-                    "summary": types.Schema(
-                        type="STRING", description="One or two sentences of context for the human"
-                    ),
-                },
-                required=["reason", "summary"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="set_contact_preference",
-            description="Record how, or whether, the customer wants to be contacted going forward.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "preference": types.Schema(type="STRING", enum=_PREFERENCE_VALUES),
-                    "callback_time": types.Schema(
-                        type="STRING", description="Only set when preference is callback_later"
-                    ),
-                },
-                required=["preference"],
-            ),
-        ),
-    ]
-)
+        properties={
+            "name": {"type": "string"},
+            "phone": {"type": "string", "description": "10-digit Indian mobile number"},
+            "budget_min_inr": {"type": "integer"},
+            "budget_max_inr": {"type": "integer"},
+            "configuration_interest": {"type": "array", "items": {"type": "string"}},
+            "primary_configuration": {"type": "string"},
+            "purpose": {"type": "string"},
+            "timeline": {"type": "string"},
+            "decision_authority": {"type": "string"},
+            "location_fit": {"type": "string"},
+            "language_preference": {"type": "string"},
+            "notes": {"type": "array", "items": {"type": "string"}},
+            "stage": {"type": "string", "enum": _STAGE_VALUES},
+        },
+        required=[],
+    ),
+    ToolSpec(
+        name="check_slot_availability",
+        description="Look up open site-visit windows for a given date.",
+        properties={"date_str": {"type": "string", "description": "YYYY-MM-DD"}},
+        required=["date_str"],
+    ),
+    ToolSpec(
+        name="book_site_visit",
+        description="Attempt to book a site visit for the customer.",
+        properties={
+            "date_str": {"type": "string", "description": "YYYY-MM-DD"},
+            "slot": {"type": "string", "description": "HH:MM, 24-hour"},
+            "phone": {"type": "string", "description": "10-digit Indian mobile number"},
+        },
+        required=["date_str", "slot", "phone"],
+    ),
+    ToolSpec(
+        name="escalate_to_human",
+        description="Hand the conversation off to a human team member.",
+        properties={
+            "reason": {"type": "string"},
+            "summary": {
+                "type": "string",
+                "description": "One or two sentences of context for the human",
+            },
+        },
+        required=["reason", "summary"],
+    ),
+    ToolSpec(
+        name="set_contact_preference",
+        description="Record how, or whether, the customer wants to be contacted going forward.",
+        properties={
+            "preference": {"type": "string", "enum": _PREFERENCE_VALUES},
+            "callback_time": {
+                "type": "string",
+                "description": "Only set when preference is callback_later",
+            },
+        },
+        required=["preference"],
+    ),
+]
 
 
 class ToolDispatcher:

@@ -1,36 +1,16 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from google.genai import types
 
 from app.agent.orchestrator import Orchestrator
 from app.agent.tools import ToolDispatcher
 from app.models import Channel, Session, Stage
 from app.services.booking import BookingService
 from app.services.crm import CrmService
-from tests.fakes import FakeLLMClient, text_response
+from tests.fakes import FakeLLMClient, text_response, tool_call_response
 
 _TODAY = datetime.now(UTC).date()
 _VALID_DATE = (_TODAY + timedelta(days=2)).isoformat()
-
-
-def _tool_call_response(
-    *calls: tuple[str, dict], finish_reason: str = "STOP"
-) -> types.GenerateContentResponse:
-    parts = [
-        types.Part(function_call=types.FunctionCall(id=f"call_{i}", name=name, args=args))
-        for i, (name, args) in enumerate(calls)
-    ]
-    return types.GenerateContentResponse(
-        candidates=[
-            types.Candidate(
-                content=types.Content(role="model", parts=parts), finish_reason=finish_reason
-            )
-        ],
-        usage_metadata=types.GenerateContentResponseUsageMetadata(
-            prompt_token_count=100, candidates_token_count=20, cached_content_token_count=0
-        ),
-    )
 
 
 def _session() -> Session:
@@ -57,7 +37,7 @@ async def test_no_tool_call_returns_text_directly() -> None:
 async def test_single_tool_call_dispatches_and_loops() -> None:
     llm = FakeLLMClient(
         [
-            _tool_call_response(("update_lead_profile", {"name": "Rohit"})),
+            tool_call_response(("update_lead_profile", {"name": "Rohit"})),
             text_response("Got it, Rohit!"),
         ]
     )
@@ -70,20 +50,18 @@ async def test_single_tool_call_dispatches_and_loops() -> None:
     assert len(session.tool_events) == 1
     assert session.tool_events[0].name == "update_lead_profile"
     assert session.tool_events[0].ok is True
-    # All results for one model turn go back in a single following user-role message
-    # (rules.md A7), never split across messages. FakeLLMClient.calls holds a live reference
-    # to session.messages, so it reflects the final state — check session.messages by index
-    # for the state as of that point in the loop instead.
+    # All results for one model turn go back in a single following tool_result message
+    # (rules.md A7), never split across messages — provider-neutral shape now (app/llm/base.py).
     tool_result_message = session.messages[1]
-    assert tool_result_message["role"] == "user"
-    assert "function_response" in tool_result_message["parts"][0]
+    assert tool_result_message["role"] == "tool_result"
+    assert tool_result_message["results"][0]["name"] == "update_lead_profile"
 
 
 @pytest.mark.asyncio
-async def test_parallel_tool_calls_go_back_in_one_user_message() -> None:
+async def test_parallel_tool_calls_go_back_in_one_tool_result_message() -> None:
     llm = FakeLLMClient(
         [
-            _tool_call_response(
+            tool_call_response(
                 ("update_lead_profile", {"name": "Priya"}),
                 ("check_slot_availability", {"date_str": _VALID_DATE}),
             ),
@@ -96,16 +74,15 @@ async def test_parallel_tool_calls_go_back_in_one_user_message() -> None:
 
     assert len(session.tool_events) == 2
     tool_result_message = session.messages[1]
-    assert tool_result_message["role"] == "user"
-    assert len(tool_result_message["parts"]) == 2
+    assert tool_result_message["role"] == "tool_result"
+    assert len(tool_result_message["results"]) == 2
 
 
 @pytest.mark.asyncio
 async def test_iteration_cap_forces_graceful_close_and_escalates() -> None:
     # The model never stops asking for a tool — every scripted turn is another tool call.
     script = [
-        _tool_call_response(("check_slot_availability", {"date_str": _VALID_DATE}))
-        for _ in range(4)
+        tool_call_response(("check_slot_availability", {"date_str": _VALID_DATE})) for _ in range(4)
     ]
     llm = FakeLLMClient(script)
     session = _session()
@@ -121,7 +98,7 @@ async def test_iteration_cap_forces_graceful_close_and_escalates() -> None:
 async def test_booking_failure_records_error_code_and_recovery_hint_never_confirms() -> None:
     llm = FakeLLMClient(
         [
-            _tool_call_response(
+            tool_call_response(
                 (
                     "book_site_visit",
                     {"date_str": _VALID_DATE, "slot": "10:00", "phone": "9876543210"},
@@ -146,7 +123,7 @@ async def test_booking_failure_records_error_code_and_recovery_hint_never_confir
 async def test_dnc_tool_call_sets_stage_and_registers_phone() -> None:
     llm = FakeLLMClient(
         [
-            _tool_call_response(("set_contact_preference", {"preference": "do_not_contact"})),
+            tool_call_response(("set_contact_preference", {"preference": "do_not_contact"})),
             text_response("Understood."),
         ]
     )
@@ -165,7 +142,7 @@ async def test_dnc_tool_call_sets_stage_and_registers_phone() -> None:
 async def test_unknown_tool_call_does_not_crash_the_turn() -> None:
     llm = FakeLLMClient(
         [
-            _tool_call_response(("not_a_real_tool", {})),
+            tool_call_response(("not_a_real_tool", {})),
             text_response("Sorry about that."),
         ]
     )

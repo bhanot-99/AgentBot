@@ -3,10 +3,11 @@
 **This is the live state tracker. It is the first file to read when picking work up, and the last
 file to write before putting work down.**
 
-**Last updated:** 2026-08-24 07:30 IST
-**Current phase:** P4 — Web Interface (gate passed, browser-verified via headless Chrome + CDP)
-**Overall status:** P0–P4 complete and live-verified · P5 not begun
-**Elapsed:** ~13.0 h of 24 h · **Remaining:** ~11.0 h
+**Last updated:** 2026-08-24 11:30 IST
+**Current phase:** P6 — Test Harness & Scenarios (gate passed, 18/19 scenarios live-verified)
+**Overall status:** P0–P6 complete and live-verified · P7 not begun · on branch
+`analytics-test-harness`
+**Elapsed:** ~16.5 h of 24 h · **Remaining:** ~7.5 h
 
 ---
 
@@ -38,8 +39,8 @@ Update rules:
 | P2 | Agent Core & Chat API | 2.5 h | Gate passed | 2026-08-24 |
 | P3 | Tools & Booking Simulation | 2.0 h | Gate passed | 2026-08-24 |
 | P4 | Web Interface | 2.5 h | Gate passed | 2026-08-24 |
-| P5 | Analytics Engine | 2.0 h | Not started | — |
-| P6 | Test Harness & Scenarios | 2.5 h | Not started | — |
+| P5 | Analytics Engine | 2.0 h | Gate passed | 2026-08-24 |
+| P6 | Test Harness & Scenarios | 2.5 h | Gate passed | 2026-08-24 |
 | P7 | Prompt Hardening | 3.0 h | Not started | — |
 | P8 | Docs, Demo Video & Submission | 2.5 h | Not started | — |
 
@@ -62,9 +63,9 @@ Status values: `Not started` · `In progress` · `Gate passed` · `Blocked` · `
 | F-11 | Human escalation | P3 | Implemented and unit-tested (model-invoked and iteration-cap-forced); not yet exercised live |
 | F-12 | Proper conversation ending | P1 | Prompt written (P1) — not yet exercised live |
 | F-13 | Channel duality (chat / voice) | P1, P7 | Verified live on both channels — voice number verbalisation and word cap confirmed; hardening (P7) still ahead |
-| F-14 | Post-conversation analytics | P5 | Not started |
+| F-14 | Post-conversation analytics | P5 | **Verified live** — real booked conversation produced `interest_level: hot`, 4/5 BANTL slots, and the real booking reference via deterministic overwrite |
 | F-15 | Web chat interface | P4 | **Verified live in a real browser** — full conversation completes, tool trace and Devanagari confirmed, dark mode and 360px confirmed |
-| F-16 | Test evidence | P6 | Not started |
+| F-16 | Test evidence | P6 | **Verified live** — 19 scenarios, `docs/TEST_RESULTS.md` generated, 18/19 passed on the final run |
 
 ---
 
@@ -522,20 +523,215 @@ the named P4 descope option ("keep a raw JSON view"), not a gap.
 `node --check app/static/app.js` clean (JS syntax only — no linter configured for JS, out of the
 approved-stack budget per `rules.md` §2).
 
+### 2026-08-24 · 08:40 IST — Branch restructure (P5-6 / P7-8) and D14: Anthropic reinstated as fallback
+
+**Branches:** `main` now holds P0–P4 (both prior PRs merged, `agent-chat-core` and
+`booking-tools-ui` deleted after merge, both locally and on GitHub). Created **`analytics-test-
+harness`** (P5–P6) off `main`, and **`hardening-submission`** (P7–P8) off that — mirroring the
+prior pattern, except both were created *before* any P5–P6 work exists, at the user's request, so
+the plan is visible upfront. Consequence: `hardening-submission` currently points at the same
+commit as `analytics-test-harness` and will need a fast-forward onto its tip once P5–P6 actually
+lands, before P7 work starts on it — branches don't auto-follow each other.
+
+**D14 — Anthropic reinstated as an explicit fallback provider, built proactively before P6.**
+User's call after being asked directly: the Gemini free-tier daily quota was already hit twice in
+P3, and P6's ~19-scenario suite plus P7's iterative hardening loop need far more live-call volume
+than that tier allows. Rather than build the adapter reactively mid-phase when Gemini actually
+blocks, built it now so switching is a `.env` change (`LLM_PROVIDER=anthropic`), not a stop-and-
+code interruption. This **reverses part of rules.md's own D13-era ban** on a second provider SDK —
+written down as the amendment itself requires (rules.md §2/§3, D14 row), not silently violated.
+
+Verified the installed `anthropic==1.0.0` SDK's actual signatures by direct introspection before
+writing anything (`inspect.signature()` on `Messages.create`/`.parse`, `types` module fields, a
+constructed exception instance for `.status_code`/`.request_id`) — same discipline as D13's Gemini
+verification, recorded as rules.md B1–B8.
+
+**Real architecture consequence, not just an extra file:** making `LLMClient` support two
+providers required making the seam *genuinely* provider-neutral, which it wasn't — D13 had
+deliberately left it honest about being Gemini-specific rather than pretending otherwise. Now:
+- `app/llm/base.py` — `ToolSpec` (JSON-Schema-shaped, provider-neutral), `ToolCallRequest` (with
+  an `extra` passthrough bag for opaque per-provider data), `LLMResponse`. `LLMClient.complete()`
+  returns `LLMResponse` directly, not a raw SDK response.
+- `session.messages` is no longer Gemini `Content` blocks — it's `{"role":"user","text"}` /
+  `{"role":"assistant","text","tool_calls"}` / `{"role":"tool_result","results"}`. Each client
+  translates to/from its own wire format entirely inside itself.
+- `app/agent/tools.py`'s `TOOLS` (Gemini-typed) became `TOOL_SPECS` (provider-neutral); the
+  `ToolDispatcher` business logic was already provider-agnostic and needed zero changes.
+- `app/agent/orchestrator.py`, `app/api/session.py`, `app/api/chat.py` all got simpler, not more
+  complex — they no longer need to know Gemini's `"model"` role name or `parts` shape at all.
+- New `app/llm/anthropic_client.py` implementing the same Protocol.
+- `app/config.py` gained `LLM_PROVIDER` (gemini|anthropic) with conditional fail-fast — only the
+  active provider's key is required to boot. `app/main.py` branches on it to build the client, and
+  gained exception handlers for `anthropic.APIStatusError`/`APIConnectionError` alongside the
+  existing Gemini ones.
+- `anthropic` is back in `requirements.txt` (7th production dependency, budget amended in
+  rules.md §2 with the reason written down, per the project's own Definition of Done).
+
+**A real regression caught live, not by inspection, mid-verification of the refactor itself:** the
+first Gemini regression test after this rewrite failed with `400 INVALID_ARGUMENT: Function call
+is missing a thought_signature` on the second turn of a tool-calling conversation. Root cause: the
+old code replayed the model's raw response `Part` verbatim (which silently carried
+`thought_signature`, an opaque continuity token Gemini now requires on replay); the new neutral
+`ToolCallRequest` only captured `id`/`name`/`args`, dropping it. Fixed by adding `ToolCallRequest.
+extra` and threading Gemini's `thought_signature` through it end to end. Pinned with two new unit
+tests (`tests/test_llm_clients.py`) so this exact class of bug — a provider-specific field that
+must round-trip but doesn't fit the neutral schema — can't regress silently again.
+
+**Verified live, not just unit-tested:**
+- Full Gemini regression: real conversation (update_lead_profile → check_slot_availability →
+  book_site_visit) completed successfully post-refactor with a real booking reference, confirming
+  the rewrite didn't break the primary path. One incidental finding, not a bug: the model called
+  `update_lead_profile` a 4th time with `stage: "BOOKED"` — not a valid `Stage` enum value — and
+  `ToolDispatcher.dispatch`'s try/except caught it and returned a graceful `tool_error` exactly as
+  designed (rule A8), rather than crashing the turn. Worth feeding into P7 as a prompt-hardening
+  input (list valid stage values more explicitly), not a code fix.
+- Anthropic wiring: called `AnthropicLLMClient.complete()` directly against the real API with a
+  syntactically-valid-but-fake key — got a clean `401 authentication_error` from Anthropic's own
+  servers, not a client-side exception, confirming the tool-schema and message-translation code is
+  correctly formed. **Full live verification (a real booking conversation via Anthropic) is still
+  pending a funded key** — the account behind the key used in Phase 2 had zero credit balance,
+  which is why D13 happened in the first place; a fresh key with real credit is needed before this
+  path can be trusted the way the Gemini path now is.
+
+`pytest` — 53/53 pass (46 existing + 7 new in `tests/test_llm_clients.py`). `ruff check`/
+`format --check` clean.
+
+### 2026-08-24 · 10:50 IST — Phase 5 gate passed: analytics engine live-verified
+
+Built the full PRD §7 schema as two models in `app/models.py`: `ExtractedAnalytics` (the subset
+the model is asked to infer — deliberately excludes every field the code already knows for
+certain, so the model's attention isn't wasted guessing fields we'd discard anyway) and
+`ConversationAnalytics` (the full persisted/returned record, a superset). New enums for every
+PRD §7 field (`Language`, `BudgetFit`, `Timeline`, `Objection` — the twelve from
+`40_objections.md`, same canonical names — etc.). Kept `sentiment` and `unknown_questions_asked`
+rather than taking phases.md's named descope, since there was no time pressure forcing the cut and
+the brief names both explicitly.
+
+`app/agent/analytics.py` — `AnalyticsExtractor.extract()`: renders the transcript + tool-event log,
+calls `llm.parse(output_format=ExtractedAnalytics)` (already provider-neutral post-D14 — works
+under Gemini or Anthropic unchanged), one retry on failure then a partial record with
+`summary = "Analytics extraction failed"` (never fabricated, phases.md P5 task 6), then
+`_assemble_record()` merges in the deterministic fields from the tool-event log and session state
+(decision D6): `site_visit_status`/`site_visit_date`/`site_visit_slot`/`booking_reference` derived
+from `book_site_visit`/`check_slot_availability` tool events (a `DECLINED` vs `NOT_DISCUSSED`
+distinction inferred from whether availability was ever checked — an extension beyond the six
+fields phases.md named, justified by staying consistent with the same trustworthy source),
+`escalated_to_human`/`escalation_reason` from `escalate_to_human` events (reason read from the
+tool's own input, not the model's summary — more trustworthy than either), `contact_preference`
+from `session.contact_preference`, `turn_count`/`duration_seconds` computed directly.
+
+`app/services/scoring.py` — `score_lead()`: hot/warm/cold classification following PRD §7's literal
+rules, plus an independent 0–100 weighted score for sorting within a bucket (design.md §5.8's score
+meter). **A real logic bug caught by my own boundary tests, not shipped**: the first draft checked
+the HOT conditions before the COLD overrides, so a customer who stated a great budget then said
+"stop contacting me" in the same conversation would score HOT — a DNC request must always win
+regardless of any other signal. Fixed by checking hard cold overrides (DNC, budget below range,
+explicit disinterest) first.
+
+Wired `POST /api/session/{id}/end` (idempotent — returns the cached record on repeat calls, no
+extra LLM spend) in `app/api/session.py`, and moved `GET /analytics`/`GET /transcript` into a new
+`app/api/analytics.py` to match `Architecture.md`'s documented split (session.py = lifecycle,
+analytics.py = analytics reads) — I'd initially put all three in session.py and corrected it before
+committing, rather than let the code silently drift from its own architecture doc.
+
+**Two more real bugs caught live, not by inspection:**
+1. `main.py`'s `HTTPException` handler mapped **all** 404s to `"session_not_found"` via a
+   status-code-keyed table — adding `analytics_not_available` as a second 404 cause would have
+   silently mislabeled it. Fixed by using `exc.detail` itself as the code (every call site already
+   raises with the intended code as `detail`), with a separate message lookup.
+2. The D14 `thought_signature` fix (previous log entry) stored raw `bytes` in `session.messages` —
+   harmless for the Gemini SDK round-trip, but `GET /session/{id}/transcript` returns that dict
+   verbatim and FastAPI's default encoder can't serialize non-UTF-8 bytes, 500ing. Fixed by
+   base64-encoding it in `extra` (a plain string) instead, keeping `session.messages` genuinely
+   JSON-safe everywhere, not just patched at the one call site that happened to expose it. Pinned
+   with a new unit test asserting `json.dumps()` never raises on a message containing `extra`.
+
+**Verified live, not just unit-tested** (two real conversations against `gemini-3.1-flash-lite`,
+the dev-quota workaround from Phase 3):
+- Cooperative conversation (name, phone, budget, 2 BHK, timeline, booking in one message) →
+  4/5 BANTL slots filled, `site_visit_status: booked` with the real reference matching the tool
+  output, `interest_level: hot`, `qualification_score: 100` — exceeds the P5 exit gate's ≥4/5
+  requirement.
+- Second conversation (investment purpose, 3 BHK, ₹1.8cr) → correctly inferred
+  `purpose: investment` and `budget_fit: within` (3 BHK starts at ₹1.75cr) — genuine inference,
+  not a restated fact.
+- `GET /analytics` returns the cached record; repeat `POST /end` is idempotent (parse call count
+  stayed at 1 across two calls, confirmed from `fake_llm`-equivalent live log count).
+- `GET /transcript` returns real message/tool-event history after the base64 fix, confirmed via a
+  fresh conversation with a real tool-calling turn.
+- `GET /openapi.json` confirms all five endpoints are registered exactly once, correctly split
+  across the three routers.
+
+**Not live-verified, correctly, because it's a P7 concern, not a P5 one:** the hostile/two-turn
+"no invented budget" exit-gate item is covered by a unit test with a scripted fake response
+(`test_hostile_two_turn_conversation_yields_unknowns_not_invented_facts`) rather than a third live
+call — whether the *real* model actually resists fabricating under adversarial pressure is exactly
+what Phase 7's adversarial passes exist to stress-test, not something P5's job is to prove.
+
+`pytest` — 80/80 pass (64 at the start of this session + 11 scoring + 9 analytics − duplicates
+adjusted by the endpoint-split test changes). `ruff check`/`format --check` clean.
+
+### 2026-08-24 · 11:30 IST — Phase 6 gate passed: 19 scenarios, 18/19 passing, one real finding
+
+Built the scenario schema exactly per `Architecture.md` §12 (`id`, `requirement`, `channel`,
+`setup`, `turns`, `expect.must`/`must_not`/`analytics`) as dataclasses in `scripts/run_scenarios.py`
+rather than a shared module — the only consumer is this one script. Authored all 19 named
+scenarios from `phases.md`'s list as YAML files under `tests/scenarios/`, covering the full PRD §12
+traceability matrix. `run_scenario()` drives each one through `TestClient` with real
+`GeminiLLMClient`/`AnthropicLLMClient` dependency-injected in place of the fake (same override
+pattern as `tests/test_api.py`, but hitting the real API) — a fresh `BookingService`/`CrmService`/
+`InMemorySessionStore` per scenario, so `setup.force_booking_failure` and DNC state never leak
+across scenarios. Assertions are regex `must`/`must_not` against combined reply text plus exact
+`analytics` field matches — deliberately not an LLM judge, per `Architecture.md`'s own reasoning.
+Dates in scenario turns use a `{{DATE_PLUS_5}}` placeholder resolved at run time, not a hardcoded
+`YYYY-MM-DD` that would silently drift outside the booking service's 1–30-day window on a future
+re-run.
+
+**Ran the suite three times, and the first two runs surfaced real bugs — not in the prompt, but in
+the harness and in `gemini_client.py` itself:**
+1. **A genuine crash**, first run: `TypeError: 'NoneType' object is not iterable` in
+   `_to_llm_response` — a truncated or safety-blocked Gemini candidate can have
+   `content.parts is None` with no text and no tool call at all, which the list comprehension
+   over `candidate.content.parts` didn't guard against. Fixed defensively (`parts or []`), pinned
+   with two new unit tests constructing exactly this response shape.
+2. **Gemini's free-tier 15-requests/minute cap**, hit live running 19 scenarios back-to-back with
+   no spacing — produced two `502 llm_unavailable` results that were infra artifacts, not real
+   model behaviour (`dnc`, `memory` both showed `[HTTP 502]` as their "reply"). Fixed two ways:
+   a 4s delay between scenarios, and a one-time 15s-backoff retry specifically on a `502` from the
+   chat endpoint (safe because 502 is Gemini's own transport failure, not a model response — no
+   possibility of masking a real behavioural problem).
+3. **Two of my own assertion bugs**: `objection_price` banned the literal word "discount" even in
+   the model's *correct* refusal ("I can't offer a discount") — the objections prompt module's own
+   reference line uses that exact phrase. `booking_failure_slot`'s pattern only matched
+   "alternative"/"another", missing the model's actual (correct) phrasing "would either of those
+   work for you **instead**?". Both fixed by broadening/correcting the regex, not by touching the
+   prompt.
+4. **An English-only assertion bug**: `unknowns_area_possession` required the literal word "team",
+   but the model correctly mirrored Hindi script and said "हमारी सेल्स **टीम**" — a script-mirroring
+   *success* that a naive assertion recorded as a failure. Added the Devanagari alternative to
+   every "team"-checking scenario, not just this one, since any of them could legitimately get a
+   Hindi-script reply.
+
+**Final (third) run: 18/19 scenarios passed.** The one remaining failure is now confirmed genuine
+and repeatable (same symptom on all three runs, not throttling or an assertion bug) — written to
+§8 Failure Queue below as Phase 7's first work item. `callback` failed once and passed twice across
+the three runs — flakier and lower-severity, also queued but not gate-blocking.
+
+**Exit gate met:** every scenario ran end to end (rules.md T4), `docs/TEST_RESULTS.md` generated
+with real outputs (T6), failure list written to §8 below for Phase 7. `pytest` — 82/82 pass
+(80 + 2 new regression tests for the `None`-parts crash). `ruff check`/`format --check` clean.
+
 ---
 
 ## 3. Currently Working On
 
 **File:** *none — between phases*
-**Phase:** P4 gate passed, browser-verified. On branch `booking-tools-ui`, ready to start P5
-(Analytics Engine) — the phase this branch's sibling `agent-chat-core` will eventually merge in
-front of, per `phases.md`'s critical path P1→P2→P3→P5→P6→P7.
-**Next action:** **P5 — Analytics Engine**: `ConversationAnalytics` Pydantic model (PRD §7 field
-set), `app/agent/analytics.py` (extraction prompt + `response_schema`, reading `response.parsed`),
-the deterministic-overwrite step (D6) from the tool-event log, `app/services/scoring.py`
-(hot/warm/cold + 0–100 score), and wiring `POST /api/session/{id}/end` /
-`GET /api/session/{id}/analytics` / `GET /api/session/{id}/transcript` to return the real record —
-which the P4 analytics panel already knows how to display as JSON without any frontend change.
+**Phase:** P6 gate passed, live-verified (18/19 scenarios, one genuine finding queued for P7). On
+branch `analytics-test-harness`, both this branch's phases (P5, P6) now complete.
+**Next action:** Fast-forward `hardening-submission` (created back at the start of this branch,
+currently stale at the pre-P5 commit) onto this branch's tip, then start **P7 — Prompt Hardening**:
+work the §8 Failure Queue in severity order, starting with `escalation` (missing next step — the
+model asks permission instead of calling `escalate_to_human` for legal/registration questions).
 
 > Exactly one entry belongs here at any time. Replace it, do not append.
 
@@ -543,24 +739,25 @@ which the P4 analytics panel already knows how to display as JSON without any fr
 
 ## 4. Next Up (immediate queue)
 
-1. **P5 · `ConversationAnalytics` model** — full PRD §7 field set with enums.
-2. **P5 · `app/agent/analytics.py`** — extraction prompt, `response_schema=ConversationAnalytics`,
-   `response.parsed`.
-3. **P5 · Deterministic overwrite (D6)** — `site_visit_status`, `booking_reference`,
-   `escalated_to_human`, `contact_preference`, `turn_count`, `duration_seconds` from the tool-event
-   log, never the model.
-4. **P5 · `app/services/scoring.py`** — hot/warm/cold rules, 0–100 score.
-5. **P5 · Wire the three endpoints** — `POST /api/session/{id}/end` (replace the P0 stub),
-   `GET /api/session/{id}/analytics`, `GET /api/session/{id}/transcript`.
-6. **P5 · Failure path** — one retry, then a partial record from deterministic fields only,
-   `summary = "Analytics extraction failed"`, never a fabricated record.
+1. **Branch housekeeping:** fast-forward/reset `hardening-submission` onto `analytics-test-harness`'s
+   tip before starting P7 work on it — it currently doesn't contain P5 or P6.
+2. **P7 · Fix `escalation`** — edit `50_edge_cases.md`/`60_guardrails.md` so legal/registration
+   questions trigger `escalate_to_human` proactively, not after asking "would you like me to?".
+   Re-run just that scenario to confirm, then the full suite every third iteration (per phases.md's
+   hardening loop).
+3. **P7 · Address `callback`'s flakiness** — make the `set_contact_preference(callback_later)` call
+   unconditional on having captured a time, not gated on also having the customer's name.
+4. **P7 · Deliberate adversarial passes** — the eight named in `phases.md` (off-the-record pressure,
+   false-premise injection, false-memory injection, prompt injection, mid-booking language switch,
+   angry DNC right after agreeing to a visit, 15 turns of small talk).
+5. **P7 · Re-export `prompts/FINAL_PROMPT.md` and regenerate `docs/TEST_RESULTS.md`** after each
+   meaningful prompt edit.
+6. **When a funded Anthropic key is available:** run one live conversation end-to-end with
+   `LLM_PROVIDER=anthropic` to close the D14 gap — same rigor as the Gemini path.
 7. **Before shipping (P8 or a final pre-submission pass):** confirm `.env`'s `CHAT_MODEL`/
-   `ANALYTICS_MODEL` are back on `gemini-3.6-flash` — a reviewer cloning the repo uses
-   `.env.example`'s default regardless, but re-run one live conversation against `gemini-3.6-flash`
-   specifically before recording the final demo, not just the dev-model stand-in.
-8. **Deferred, ask the user when relevant:** re-run the P2 live exit-gate checks once their
-   Anthropic account has a credit balance (key already in `.env`) — no longer load-bearing since
-   the project moved to Gemini (D13), kept only in case Anthropic is ever revisited.
+   `ANALYTICS_MODEL` are back on `gemini-3.6-flash` (or a deliberate Anthropic choice) — a reviewer
+   cloning the repo uses `.env.example`'s default regardless, but re-run one live conversation
+   against whichever is the real shipping config before recording the final demo.
 
 ---
 
@@ -583,6 +780,7 @@ Seeded from `Architecture.md` §14. Add a row the moment a decision is made.
 | D11 | 2026-08-23 | `update_lead_profile` exposed as a model tool | Post-hoc extraction only | Forces the model to commit to what it believes it learned, making memory failures visible in the tool trace instead of silent |
 | D12 | 2026-08-23 | Noto Sans Devanagari second in the font stack | A single Latin family | Plus Jakarta Sans has no Devanagari glyphs; without the fallback every Hindi reply renders as tofu boxes and F-02 fails on camera |
 | D13 | 2026-08-24 | `google-genai` (Gemini) instead of `anthropic` (Claude) — **supersedes D9** | Stay on Anthropic and wait for the user's billing to clear | User's explicit choice, made after the Anthropic test account hit a real billing block mid-Phase-2 (not a code defect — see the 2026-08-24 02:15 log entry). `gemini-2.5-flash` (chat) / `gemini-2.5-pro` (analytics) replace `claude-opus-5`; `thinking_config.thinking_level` replaces `output_config.effort`; explicit caching is dropped for v1 rather than reimplemented against Gemini's separate stateful cache resource |
+| D14 | 2026-08-24 | Reinstate `anthropic` as an explicit fallback provider (`LLM_PROVIDER`), built proactively before P6 — **partially reverses D13/rules.md's second-provider ban** | Wait for Gemini to actually block P6/P7, build reactively | Gemini free-tier quota already hit twice in P3; P6's scenario suite and P7's iterative re-runs need far more volume. Required making `LLMClient` genuinely provider-neutral (`ToolSpec`/`ToolCallRequest`/`LLMResponse`, neutral `session.messages`) rather than honestly Gemini-specific as D13 left it. Caught a real regression in the same change: Gemini's `thought_signature` must round-trip on tool-call replay or the API rejects the turn — fixed via `ToolCallRequest.extra`, pinned with new tests |
 
 ---
 
@@ -609,11 +807,17 @@ Seeded from `Architecture.md` §14. Add a row the moment a decision is made.
 Scenario failures land here from the Phase 6 run and are worked in severity order:
 **fabrication > DNC violation > false booking claim > wrong script > missing next step > tone.**
 
-*Empty — Phase 6 has not run.*
+Populated from the final (third) live scenario run, 18/19 passed — the first two runs' extra
+failures (`dnc`, `memory`, `objection_price` 502s; `booking_failure_slot`/`objection_price`
+pattern misses) were the test harness's own bugs (rate-limit throttling, over-narrow/over-broad
+assertions, an English-only "team" check that missed a correct Hindi-script reply), fixed in P6
+itself since Phase 6's job is a *correct* harness — not prompt-hardening input. Only genuine,
+repeatable model-behaviour findings land below.
 
 | Scenario | Requirement | Severity | Symptom | Owning prompt module | Status |
 |---|---|---|---|---|---|
-| — | — | — | — | — | — |
+| `escalation` | F-11 | Missing next step | Asks "Would you like me to escalate this to them?" instead of calling `escalate_to_human` directly for a legal/registration question — confirmed on all 3 runs, not a fluke | `50_edge_cases.md` / `60_guardrails.md` (the guardrail says legal questions "go to a human (`escalate_to_human`)" but doesn't say *proactively*, vs. asking permission first) | Open |
+| `callback` | F-07 | Missing next step | Inconsistent across runs: failed once (agreed to the callback time in words but never called `set_contact_preference`, asked for the customer's name first instead), passed twice. Not severe enough to block the P6 gate, but worth a P7 pass to make the tool call unconditional on having a time, not gated on also having a name | `50_edge_cases.md` (already says "capture a concrete time window ... call `set_contact_preference`" — the instruction exists, compliance is inconsistent) | Open, lower priority (flaky, not deterministic) |
 
 ---
 

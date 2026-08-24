@@ -1,0 +1,10 @@
+id: objection_trust
+requirement: F-06
+channel: chat
+setup: {}
+turns:
+  - user: "Yeh builder reliable hai na? Kaise pata chale?"
+expect:
+  must:
+    - "team|टीम"
+  must_not: []

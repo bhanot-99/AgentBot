@@ -1,3 +1,4 @@
+import base64
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -9,6 +10,9 @@ from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel
 
+from app.llm.base import LLMResponse, ToolCallRequest, ToolSpec
+from app.models import Usage
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
@@ -17,7 +21,7 @@ _CHAT_TIMEOUT_MS = 30_000
 _ANALYTICS_TIMEOUT_MS = 60_000
 _CHAT_MAX_OUTPUT_TOKENS = 1024
 _ANALYTICS_MAX_OUTPUT_TOKENS = 4096
-# google-genai does not retry by default, unlike the Anthropic SDK this project used before
+# google-genai does not retry by default, unlike the Anthropic SDK this project also uses
 # (rules.md A12) — omitting this means one transient failure surfaces immediately.
 _RETRY_ATTEMPTS = 3
 
@@ -29,6 +33,17 @@ _CONNECTION_ERRORS = (
     httpx2.TimeoutException,
     httpx2.ConnectError,
 )
+
+# Provider-neutral ToolSpec.properties use lowercase JSON Schema type names; Gemini's
+# types.Schema wants its own uppercase Type enum names.
+_JSON_SCHEMA_TO_GEMINI_TYPE = {
+    "string": "STRING",
+    "integer": "INTEGER",
+    "number": "NUMBER",
+    "boolean": "BOOLEAN",
+    "array": "ARRAY",
+    "object": "OBJECT",
+}
 
 
 class GeminiLLMClient:
@@ -42,21 +57,21 @@ class GeminiLLMClient:
         *,
         system: str,
         messages: list[dict[str, Any]],
-        tools: list[types.Tool] | None = None,
-    ) -> types.GenerateContentResponse:
+        tools: list[ToolSpec] | None = None,
+    ) -> LLMResponse:
         config = types.GenerateContentConfig(
             system_instruction=system,
             max_output_tokens=_CHAT_MAX_OUTPUT_TOKENS,
             thinking_config=types.ThinkingConfig(thinking_level="LOW"),
             http_options=_http_options(_CHAT_TIMEOUT_MS),
-            tools=tools,
+            tools=[_to_gemini_tool(tools)] if tools else None,
         )
         async with _log_gemini_errors():
             response = await self._client.aio.models.generate_content(
-                model=self._chat_model, contents=messages, config=config
+                model=self._chat_model, contents=_to_gemini_contents(messages), config=config
             )
         _log_usage(response)
-        return response
+        return _to_llm_response(response)
 
     async def parse(
         self,
@@ -75,10 +90,113 @@ class GeminiLLMClient:
         )
         async with _log_gemini_errors():
             response = await self._client.aio.models.generate_content(
-                model=self._analytics_model, contents=messages, config=config
+                model=self._analytics_model, contents=_to_gemini_contents(messages), config=config
             )
         _log_usage(response)
         return response.parsed
+
+
+def _to_gemini_schema(properties: dict[str, Any]) -> types.Schema:
+    json_type = properties.get("type", "string")
+    kwargs: dict[str, Any] = {"type": _JSON_SCHEMA_TO_GEMINI_TYPE[json_type]}
+    if "description" in properties:
+        kwargs["description"] = properties["description"]
+    if "enum" in properties:
+        kwargs["enum"] = properties["enum"]
+    if json_type == "array" and "items" in properties:
+        kwargs["items"] = _to_gemini_schema(properties["items"])
+    return types.Schema(**kwargs)
+
+
+def _to_gemini_tool(tools: list[ToolSpec]) -> types.Tool:
+    return types.Tool(
+        function_declarations=[
+            types.FunctionDeclaration(
+                name=spec.name,
+                description=spec.description,
+                parameters=types.Schema(
+                    type="OBJECT",
+                    properties={
+                        name: _to_gemini_schema(prop) for name, prop in spec.properties.items()
+                    },
+                    required=spec.required,
+                ),
+            )
+            for spec in tools
+        ]
+    )
+
+
+def _to_gemini_contents(messages: list[dict[str, Any]]) -> list[types.Content]:
+    contents = []
+    for message in messages:
+        role = message["role"]
+        if role == "user":
+            contents.append(types.Content(role="user", parts=[types.Part(text=message["text"])]))
+        elif role == "assistant":
+            parts = []
+            if message.get("text"):
+                parts.append(types.Part(text=message["text"]))
+            for call in message.get("tool_calls", []):
+                encoded_signature = call.get("extra", {}).get("thought_signature")
+                parts.append(
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            id=call["id"], name=call["name"], args=call["args"]
+                        ),
+                        # Required verbatim on the follow-up request, or Gemini rejects the
+                        # turn with 400 INVALID_ARGUMENT ("Function call is missing a
+                        # thought_signature") — caught live, not documented up front. Stored
+                        # base64-encoded in `extra` (a plain str) so session.messages stays
+                        # JSON-serializable everywhere — raw bytes broke GET /transcript, also
+                        # caught live.
+                        thought_signature=base64.b64decode(encoded_signature)
+                        if encoded_signature
+                        else None,
+                    )
+                )
+            contents.append(types.Content(role="model", parts=parts))
+        elif role == "tool_result":
+            parts = [
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id=result["id"], name=result["name"], response=result["output"]
+                    )
+                )
+                for result in message["results"]
+            ]
+            contents.append(types.Content(role="user", parts=parts))
+    return contents
+
+
+def _to_llm_response(response: types.GenerateContentResponse) -> LLMResponse:
+    candidate = response.candidates[0]
+    # A truncated or safety-blocked candidate can have content=None or parts=None with no
+    # text and no tool call at all (finish_reason MAX_TOKENS/SAFETY/RECITATION) — caught live
+    # during a scenario run, not by inspection. Treat it as an empty, textless turn rather
+    # than crashing the whole request with "NoneType is not iterable".
+    parts = candidate.content.parts if candidate.content else None
+    tool_calls = [
+        ToolCallRequest(
+            id=part.function_call.id or part.function_call.name,
+            name=part.function_call.name,
+            args=dict(part.function_call.args or {}),
+            extra={"thought_signature": base64.b64encode(part.thought_signature).decode("ascii")}
+            if part.thought_signature
+            else {},
+        )
+        for part in (parts or [])
+        if part.function_call
+    ]
+    usage_metadata = response.usage_metadata
+    usage = Usage(
+        input_tokens=usage_metadata.prompt_token_count or 0,
+        cache_read_input_tokens=usage_metadata.cached_content_token_count or 0,
+        output_tokens=usage_metadata.candidates_token_count or 0,
+    )
+    return LLMResponse(
+        text=(response.text or "").strip() or None, tool_calls=tool_calls, usage=usage
+    )
 
 
 def _http_options(timeout_ms: int) -> types.HttpOptions:

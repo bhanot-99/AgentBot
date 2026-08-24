@@ -1,0 +1,11 @@
+id: language_hinglish
+requirement: F-02
+channel: chat
+setup: {}
+turns:
+  - user: "2 BHK ka price kya hai?"
+expect:
+  must:
+    - "1\\.35"
+  must_not:
+    - "[ऀ-ॿ]"

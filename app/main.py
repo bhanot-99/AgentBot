@@ -5,6 +5,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import anthropic
 import httpx
 import httpx2
 from fastapi import FastAPI, HTTPException, Request
@@ -14,8 +15,10 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from google.genai import errors as genai_errors
 
-from app.api import chat, session
+from app.api import analytics, chat, session
 from app.config import get_settings
+from app.llm.anthropic_client import AnthropicLLMClient
+from app.llm.base import LLMClient
 from app.llm.gemini_client import GeminiLLMClient
 from app.models import ErrorDetail, ErrorEnvelope
 from app.services.booking import BookingService
@@ -61,14 +64,26 @@ settings = get_settings()
 configure_logging(settings.log_level)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    app.state.session_store = InMemorySessionStore(ttl_minutes=settings.session_ttl_minutes)
-    app.state.llm_client = GeminiLLMClient(
+def _build_llm_client() -> LLMClient:
+    # LLM_PROVIDER is the only branch point — everything above this seam (orchestrator,
+    # tools.py, session storage) is provider-neutral (app/llm/base.py).
+    if settings.llm_provider == "anthropic":
+        return AnthropicLLMClient(
+            api_key=settings.anthropic_api_key,
+            chat_model=settings.anthropic_chat_model,
+            analytics_model=settings.anthropic_analytics_model,
+        )
+    return GeminiLLMClient(
         api_key=settings.gemini_api_key,
         chat_model=settings.chat_model,
         analytics_model=settings.analytics_model,
     )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    app.state.session_store = InMemorySessionStore(ttl_minutes=settings.session_ttl_minutes)
+    app.state.llm_client = _build_llm_client()
     app.state.booking_service = BookingService(force_failure=settings.force_booking_failure)
     app.state.crm_service = CrmService()
     yield
@@ -85,6 +100,7 @@ app.add_middleware(
 
 app.include_router(session.router)
 app.include_router(chat.router)
+app.include_router(analytics.router)
 
 
 def _error_response(
@@ -108,11 +124,22 @@ async def handle_validation_error(request: Request, exc: RequestValidationError)
     return _error_response(400, "invalid_request", detail)
 
 
+_HTTP_ERROR_MESSAGES = {
+    "session_not_found": "Session has expired or does not exist.",
+    "session_ended": "This session has already ended.",
+    "analytics_not_available": "Analytics are not available until the session has ended.",
+}
+
+
 @app.exception_handler(HTTPException)
 async def handle_http_exception(request: Request, exc: HTTPException) -> JSONResponse:
-    code_by_status = {404: "session_not_found", 409: "session_ended"}
-    code = code_by_status.get(exc.status_code, "invalid_request")
-    return _error_response(exc.status_code, code, str(exc.detail))
+    # Every call site already raises with the intended machine-readable code as `detail`
+    # (e.g. "session_not_found") — using it directly, rather than a status-code-keyed table,
+    # is what lets two different 404s (unknown session vs. analytics not ready yet) carry
+    # distinct codes instead of collapsing to the same one.
+    code = exc.detail if isinstance(exc.detail, str) else "invalid_request"
+    message = _HTTP_ERROR_MESSAGES.get(code, code)
+    return _error_response(exc.status_code, code, message)
 
 
 @app.exception_handler(httpx.TransportError)
@@ -152,6 +179,30 @@ async def handle_llm_client_error(request: Request, exc: genai_errors.ClientErro
 @app.exception_handler(genai_errors.ServerError)
 async def handle_llm_server_error(request: Request, exc: genai_errors.ServerError) -> JSONResponse:
     logger.error("llm unavailable: status=%s message=%s", exc.status, exc.message)
+    return _error_response(
+        502,
+        "llm_unavailable",
+        "The assistant is temporarily unavailable. Please try again shortly.",
+    )
+
+
+@app.exception_handler(anthropic.APIStatusError)
+async def handle_anthropic_status_error(
+    request: Request, exc: anthropic.APIStatusError
+) -> JSONResponse:
+    logger.error("llm unavailable: status=%s message=%s", exc.status_code, exc.message)
+    return _error_response(
+        502,
+        "llm_unavailable",
+        "The assistant is temporarily unavailable. Please try again shortly.",
+    )
+
+
+@app.exception_handler(anthropic.APIConnectionError)
+async def handle_anthropic_connection_error(
+    request: Request, exc: anthropic.APIConnectionError
+) -> JSONResponse:
+    logger.error("llm unavailable (connection): %s", exc)
     return _error_response(
         502,
         "llm_unavailable",

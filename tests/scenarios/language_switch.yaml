@@ -1,0 +1,11 @@
+id: language_switch
+requirement: F-02
+channel: chat
+setup: {}
+turns:
+  - user: "Hi, what is the price of a 2 BHK?"
+  - user: "achha, possession kab hoga?"
+  - user: "theek hai, dhanyavaad"
+expect:
+  must: []
+  must_not: []

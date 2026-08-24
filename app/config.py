@@ -1,18 +1,24 @@
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # min_length=1 matters: `.env.example` copied straight to `.env` produces
-    # `GEMINI_API_KEY=` (present but empty), which a bare `str` field accepts silently —
-    # defeating the whole point of the fail-fast check below. Caught live, not by inspection.
-    gemini_api_key: str = Field(min_length=1)
+    # Which provider is active — a config value, never branched on elsewhere (rules.md C10).
+    # Anthropic is the fallback for when the Gemini free-tier daily quota runs out mid-project.
+    llm_provider: Literal["gemini", "anthropic"] = "gemini"
+
+    gemini_api_key: str = ""
     chat_model: str = "gemini-3.6-flash"
     analytics_model: str = "gemini-3.6-flash"
+
+    anthropic_api_key: str = ""
+    anthropic_chat_model: str = "claude-haiku-4-5"
+    anthropic_analytics_model: str = "claude-haiku-4-5"
+
     session_ttl_minutes: int = 120
     force_booking_failure: str = ""
     log_level: str = "INFO"
@@ -22,15 +28,17 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     # Fail fast at startup with a named variable, not a traceback (phases.md P0 exit gate).
-    try:
-        return Settings()
-    except ValidationError as exc:
-        missing = ", ".join(
-            str(err["loc"][0]).upper()
-            for err in exc.errors()
-            if err["type"] in ("missing", "string_too_short")
-        )
+    # Only the active provider's key is required — copying .env.example with LLM_PROVIDER=gemini
+    # and an empty ANTHROPIC_API_KEY must still boot cleanly.
+    settings = Settings()
+    if settings.llm_provider == "gemini" and len(settings.gemini_api_key) < 1:
         raise SystemExit(
-            f"Missing required environment variable: {missing or 'GEMINI_API_KEY'}. "
+            "Missing required environment variable: GEMINI_API_KEY. "
             "Copy .env.example to .env and set it."
-        ) from exc
+        )
+    if settings.llm_provider == "anthropic" and len(settings.anthropic_api_key) < 1:
+        raise SystemExit(
+            "Missing required environment variable: ANTHROPIC_API_KEY. "
+            "Copy .env.example to .env and set it."
+        )
+    return settings

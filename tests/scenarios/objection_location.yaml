@@ -1,0 +1,10 @@
+id: objection_location
+requirement: F-06
+channel: chat
+setup: {}
+turns:
+  - user: "Yeh location toh bahut door hai."
+expect:
+  must:
+    - "site visit"
+  must_not: []

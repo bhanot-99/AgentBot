@@ -1,0 +1,11 @@
+id: memory
+requirement: F-04
+channel: chat
+setup: {}
+turns:
+  - user: "My name is Priya and my budget is 1.5 crore."
+  - user: "What was my budget again?"
+expect:
+  must:
+    - "1\\.5"
+  must_not: []
