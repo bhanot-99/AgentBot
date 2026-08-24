@@ -21,6 +21,7 @@ The three screenshots (`Screenshot_2026-08-23_23-24-52.png`, `Screenshot_2026-08
   - Handle different intents/objections, simulate site-visit booking (including failed bookings)
   - Generate post-conversation analytics (budget, interest level, configuration, site-visit status, follow-up requirement, etc.)
   - Include test cases showing input, expected behavior, and actual output
+- **Explicit priority statement:** "Keep the implementation simple. We are mainly interested in prompt quality, agent behaviour, and how you structure the solution." — code polish is secondary to prompt/behaviour quality.
 - **Submission requirements:**
   1. **Public GitHub repo** with: final prompt, source code, README, `.env.example` (no committed secrets)
   2. **Demo video** (Loom/Drive/unlisted YouTube) showing the bot working, a sample conversation, prompt approach, and implementation explanation
