@@ -50,7 +50,7 @@
 │  SERVICE LAYER (deterministic, unit-tested, no LLM)                       │
 │   BookingService (slots, validation, failure injection)                    │
 │   CrmService     (escalation tickets, DNC register, lead record)          │
-│   LeadScorer     (rule-based hot/warm/cold + 0-100 score)                  │
+│   score_lead()   (rule-based hot/warm/cold + 0-100 score)                  │
 ├────────────────────────────────┼──────────────────────────────────────────┤
 │  INFRASTRUCTURE                                                           │
 │   SessionStore (Protocol) ──▶ InMemorySessionStore   [Redis-ready]        │
@@ -95,25 +95,24 @@ we tested.
 2.  Load session → history, lead profile, tool events
 3.  Guardrails: length cap (2000 chars), rate limit, session-ended check
 4.  Append user message to history
-5.  ── AGENT LOOP (max 4 iterations) ───────────────────────────────────
-    a. client.messages.create(
-         model=CHAT_MODEL,
-         system=[{ text: SYSTEM_PROMPT, cache_control:{type:"ephemeral"} },
-                 { text: LIVE_STATE_BLOCK }],          # volatile → after cache point
-         messages=history,
-         tools=TOOL_SCHEMAS,
-         max_tokens=1024,
-         output_config={"effort": "low"},
-       )
-    b. stop_reason == "end_turn"  → break
-    c. stop_reason == "tool_use"  →
-         • append assistant content (all blocks) to history
-         • execute EVERY tool_use block
+5.  ── AGENT LOOP (max 4 iterations, Orchestrator.run_turn) ─────────────
+    a. llm.complete(                                    # LLMClient Protocol (D14) —
+         system=SYSTEM_PROMPT + "\n\n---\n\n" + LIVE_STATE_BLOCK,   # provider-neutral,
+         messages=session.messages,                      # never a raw Gemini/Anthropic
+         tools=TOOL_SPECS,                                # wire type outside app/llm/*
+       ) -> LLMResponse{text, tool_calls, usage}
+    b. no tool_calls  → return response.text, break
+    c. tool_calls present →
+         • append assistant message {role, text, tool_calls} to session.messages
+         • execute EVERY tool call via ToolDispatcher.dispatch()
          • apply side effects to session state
          • record ToolEvent{name, input, output, ok, latency_ms}
-         • append ALL tool_results in ONE user message
+         • append ALL tool results in ONE {role:"tool_result", results:[...]} message
          • loop
     d. iteration cap reached → force a graceful close, flag for escalation
+
+No explicit prompt caching in v1 (rules.md A15) — SYSTEM_PROMPT and LIVE_STATE_BLOCK are one
+plain string per call, not a cache-annotated content block list.
 6.  Extract final text → append to history
 7.  Persist session
 8.  Return {reply, tool_events, lead_profile, stage, turn_id}
@@ -128,19 +127,18 @@ not an unbounded loop.
 
 ```
 POST /api/session/{id}/end
-  → mark ended, stop accepting turns
-  → AnalyticsExtractor:
-        client.messages.parse(
-          model=ANALYTICS_MODEL,
-          output_format=ConversationAnalytics,      # Pydantic → validated
-          messages=[{role:"user", content: rendered_transcript + tool_event_log}],
+  → mark ended, stop accepting turns (idempotent — returns cached record if already ended)
+  → AnalyticsExtractor.extract(session):
+        llm.parse(                                  # LLMClient Protocol (D14), 2 attempts
           system=ANALYTICS_PROMPT,
-          max_tokens=4096,
+          messages=[{role:"user", text: rendered_transcript + tool_event_log}],
+          response_model=ExtractedAnalytics,         # Pydantic → validated
         )
+        → on total failure: partial record, summary="Analytics extraction failed"
   → overwrite model-derived fields with deterministic ground truth:
         site_visit_status, booking_reference, escalated_to_human,
         contact_preference, turn_count, duration  ← from tool events, not the model
-  → LeadScorer.score(record) → interest_level, qualification_score
+  → score_lead(record) → interest_level, qualification_score  (app/services/scoring.py)
   → cache on session; return record
 ```
 

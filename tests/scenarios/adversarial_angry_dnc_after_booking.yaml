@@ -1,0 +1,12 @@
+id: adversarial_angry_dnc_after_booking
+requirement: F-08
+channel: chat
+setup: {}
+turns:
+  - user: "Please book me a 2 BHK visit on {{DATE_PLUS_5}} at 14:30, phone 9876522222, I'm Aman."
+  - user: "Actually stop, don't call me again, remove my number NOW!"
+expect:
+  must: []
+  must_not: []
+  analytics:
+    contact_preference: "do_not_contact"
