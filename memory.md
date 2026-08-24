@@ -3,10 +3,12 @@
 **This is the live state tracker. It is the first file to read when picking work up, and the last
 file to write before putting work down.**
 
-**Last updated:** 2026-08-24 07:30 IST
-**Current phase:** P4 — Web Interface (gate passed, browser-verified via headless Chrome + CDP)
-**Overall status:** P0–P4 complete and live-verified · P5 not begun
-**Elapsed:** ~13.0 h of 24 h · **Remaining:** ~11.0 h
+**Last updated:** 2026-08-24 08:40 IST
+**Current phase:** P4 complete · D14 (dual-provider LLM adapter) built ahead of P6, Gemini side
+regression-verified live, Anthropic side wiring-verified (funded key still pending)
+**Overall status:** P0–P4 complete and live-verified · P5 not begun · on branch
+`analytics-test-harness`
+**Elapsed:** ~13.5 h of 24 h · **Remaining:** ~10.5 h
 
 ---
 
@@ -522,20 +524,94 @@ the named P4 descope option ("keep a raw JSON view"), not a gap.
 `node --check app/static/app.js` clean (JS syntax only — no linter configured for JS, out of the
 approved-stack budget per `rules.md` §2).
 
+### 2026-08-24 · 08:40 IST — Branch restructure (P5-6 / P7-8) and D14: Anthropic reinstated as fallback
+
+**Branches:** `main` now holds P0–P4 (both prior PRs merged, `agent-chat-core` and
+`booking-tools-ui` deleted after merge, both locally and on GitHub). Created **`analytics-test-
+harness`** (P5–P6) off `main`, and **`hardening-submission`** (P7–P8) off that — mirroring the
+prior pattern, except both were created *before* any P5–P6 work exists, at the user's request, so
+the plan is visible upfront. Consequence: `hardening-submission` currently points at the same
+commit as `analytics-test-harness` and will need a fast-forward onto its tip once P5–P6 actually
+lands, before P7 work starts on it — branches don't auto-follow each other.
+
+**D14 — Anthropic reinstated as an explicit fallback provider, built proactively before P6.**
+User's call after being asked directly: the Gemini free-tier daily quota was already hit twice in
+P3, and P6's ~19-scenario suite plus P7's iterative hardening loop need far more live-call volume
+than that tier allows. Rather than build the adapter reactively mid-phase when Gemini actually
+blocks, built it now so switching is a `.env` change (`LLM_PROVIDER=anthropic`), not a stop-and-
+code interruption. This **reverses part of rules.md's own D13-era ban** on a second provider SDK —
+written down as the amendment itself requires (rules.md §2/§3, D14 row), not silently violated.
+
+Verified the installed `anthropic==1.0.0` SDK's actual signatures by direct introspection before
+writing anything (`inspect.signature()` on `Messages.create`/`.parse`, `types` module fields, a
+constructed exception instance for `.status_code`/`.request_id`) — same discipline as D13's Gemini
+verification, recorded as rules.md B1–B8.
+
+**Real architecture consequence, not just an extra file:** making `LLMClient` support two
+providers required making the seam *genuinely* provider-neutral, which it wasn't — D13 had
+deliberately left it honest about being Gemini-specific rather than pretending otherwise. Now:
+- `app/llm/base.py` — `ToolSpec` (JSON-Schema-shaped, provider-neutral), `ToolCallRequest` (with
+  an `extra` passthrough bag for opaque per-provider data), `LLMResponse`. `LLMClient.complete()`
+  returns `LLMResponse` directly, not a raw SDK response.
+- `session.messages` is no longer Gemini `Content` blocks — it's `{"role":"user","text"}` /
+  `{"role":"assistant","text","tool_calls"}` / `{"role":"tool_result","results"}`. Each client
+  translates to/from its own wire format entirely inside itself.
+- `app/agent/tools.py`'s `TOOLS` (Gemini-typed) became `TOOL_SPECS` (provider-neutral); the
+  `ToolDispatcher` business logic was already provider-agnostic and needed zero changes.
+- `app/agent/orchestrator.py`, `app/api/session.py`, `app/api/chat.py` all got simpler, not more
+  complex — they no longer need to know Gemini's `"model"` role name or `parts` shape at all.
+- New `app/llm/anthropic_client.py` implementing the same Protocol.
+- `app/config.py` gained `LLM_PROVIDER` (gemini|anthropic) with conditional fail-fast — only the
+  active provider's key is required to boot. `app/main.py` branches on it to build the client, and
+  gained exception handlers for `anthropic.APIStatusError`/`APIConnectionError` alongside the
+  existing Gemini ones.
+- `anthropic` is back in `requirements.txt` (7th production dependency, budget amended in
+  rules.md §2 with the reason written down, per the project's own Definition of Done).
+
+**A real regression caught live, not by inspection, mid-verification of the refactor itself:** the
+first Gemini regression test after this rewrite failed with `400 INVALID_ARGUMENT: Function call
+is missing a thought_signature` on the second turn of a tool-calling conversation. Root cause: the
+old code replayed the model's raw response `Part` verbatim (which silently carried
+`thought_signature`, an opaque continuity token Gemini now requires on replay); the new neutral
+`ToolCallRequest` only captured `id`/`name`/`args`, dropping it. Fixed by adding `ToolCallRequest.
+extra` and threading Gemini's `thought_signature` through it end to end. Pinned with two new unit
+tests (`tests/test_llm_clients.py`) so this exact class of bug — a provider-specific field that
+must round-trip but doesn't fit the neutral schema — can't regress silently again.
+
+**Verified live, not just unit-tested:**
+- Full Gemini regression: real conversation (update_lead_profile → check_slot_availability →
+  book_site_visit) completed successfully post-refactor with a real booking reference, confirming
+  the rewrite didn't break the primary path. One incidental finding, not a bug: the model called
+  `update_lead_profile` a 4th time with `stage: "BOOKED"` — not a valid `Stage` enum value — and
+  `ToolDispatcher.dispatch`'s try/except caught it and returned a graceful `tool_error` exactly as
+  designed (rule A8), rather than crashing the turn. Worth feeding into P7 as a prompt-hardening
+  input (list valid stage values more explicitly), not a code fix.
+- Anthropic wiring: called `AnthropicLLMClient.complete()` directly against the real API with a
+  syntactically-valid-but-fake key — got a clean `401 authentication_error` from Anthropic's own
+  servers, not a client-side exception, confirming the tool-schema and message-translation code is
+  correctly formed. **Full live verification (a real booking conversation via Anthropic) is still
+  pending a funded key** — the account behind the key used in Phase 2 had zero credit balance,
+  which is why D13 happened in the first place; a fresh key with real credit is needed before this
+  path can be trusted the way the Gemini path now is.
+
+`pytest` — 53/53 pass (46 existing + 7 new in `tests/test_llm_clients.py`). `ruff check`/
+`format --check` clean.
+
 ---
 
 ## 3. Currently Working On
 
 **File:** *none — between phases*
-**Phase:** P4 gate passed, browser-verified. On branch `booking-tools-ui`, ready to start P5
-(Analytics Engine) — the phase this branch's sibling `agent-chat-core` will eventually merge in
-front of, per `phases.md`'s critical path P1→P2→P3→P5→P6→P7.
+**Phase:** P4 gate passed. D14 (dual-provider adapter) built and Gemini-side regression-verified
+live; Anthropic side wiring-verified but not yet live-conversation-verified (needs a funded key).
+On branch `analytics-test-harness`, ready to start P5 (Analytics Engine).
 **Next action:** **P5 — Analytics Engine**: `ConversationAnalytics` Pydantic model (PRD §7 field
-set), `app/agent/analytics.py` (extraction prompt + `response_schema`, reading `response.parsed`),
-the deterministic-overwrite step (D6) from the tool-event log, `app/services/scoring.py`
-(hot/warm/cold + 0–100 score), and wiring `POST /api/session/{id}/end` /
-`GET /api/session/{id}/analytics` / `GET /api/session/{id}/transcript` to return the real record —
-which the P4 analytics panel already knows how to display as JSON without any frontend change.
+set), `app/agent/analytics.py` (extraction prompt + `response_schema`/`output_format` depending on
+active provider, reading the parsed result), the deterministic-overwrite step (D6) from the
+tool-event log, `app/services/scoring.py` (hot/warm/cold + 0–100 score), and wiring
+`POST /api/session/{id}/end` / `GET /api/session/{id}/analytics` / `GET /api/session/{id}/
+transcript` to return the real record — which the P4 analytics panel already knows how to display
+as JSON without any frontend change.
 
 > Exactly one entry belongs here at any time. Replace it, do not append.
 
@@ -544,8 +620,9 @@ which the P4 analytics panel already knows how to display as JSON without any fr
 ## 4. Next Up (immediate queue)
 
 1. **P5 · `ConversationAnalytics` model** — full PRD §7 field set with enums.
-2. **P5 · `app/agent/analytics.py`** — extraction prompt, `response_schema=ConversationAnalytics`,
-   `response.parsed`.
+2. **P5 · `app/agent/analytics.py`** — extraction prompt, `LLMClient.parse(output_format=
+   ConversationAnalytics)` (already provider-neutral post-D14 — works under either backend
+   unchanged).
 3. **P5 · Deterministic overwrite (D6)** — `site_visit_status`, `booking_reference`,
    `escalated_to_human`, `contact_preference`, `turn_count`, `duration_seconds` from the tool-event
    log, never the model.
@@ -554,13 +631,12 @@ which the P4 analytics panel already knows how to display as JSON without any fr
    `GET /api/session/{id}/analytics`, `GET /api/session/{id}/transcript`.
 6. **P5 · Failure path** — one retry, then a partial record from deterministic fields only,
    `summary = "Analytics extraction failed"`, never a fabricated record.
-7. **Before shipping (P8 or a final pre-submission pass):** confirm `.env`'s `CHAT_MODEL`/
-   `ANALYTICS_MODEL` are back on `gemini-3.6-flash` — a reviewer cloning the repo uses
-   `.env.example`'s default regardless, but re-run one live conversation against `gemini-3.6-flash`
-   specifically before recording the final demo, not just the dev-model stand-in.
-8. **Deferred, ask the user when relevant:** re-run the P2 live exit-gate checks once their
-   Anthropic account has a credit balance (key already in `.env`) — no longer load-bearing since
-   the project moved to Gemini (D13), kept only in case Anthropic is ever revisited.
+7. **When a funded Anthropic key is available:** run one live conversation end-to-end with
+   `LLM_PROVIDER=anthropic` to close the one gap D14 left open — same rigor as the Gemini path.
+8. **Before shipping (P8 or a final pre-submission pass):** confirm `.env`'s `CHAT_MODEL`/
+   `ANALYTICS_MODEL` are back on `gemini-3.6-flash` (or a deliberate Anthropic choice) — a reviewer
+   cloning the repo uses `.env.example`'s default regardless, but re-run one live conversation
+   against whichever is the real shipping config before recording the final demo.
 
 ---
 
@@ -583,6 +659,7 @@ Seeded from `Architecture.md` §14. Add a row the moment a decision is made.
 | D11 | 2026-08-23 | `update_lead_profile` exposed as a model tool | Post-hoc extraction only | Forces the model to commit to what it believes it learned, making memory failures visible in the tool trace instead of silent |
 | D12 | 2026-08-23 | Noto Sans Devanagari second in the font stack | A single Latin family | Plus Jakarta Sans has no Devanagari glyphs; without the fallback every Hindi reply renders as tofu boxes and F-02 fails on camera |
 | D13 | 2026-08-24 | `google-genai` (Gemini) instead of `anthropic` (Claude) — **supersedes D9** | Stay on Anthropic and wait for the user's billing to clear | User's explicit choice, made after the Anthropic test account hit a real billing block mid-Phase-2 (not a code defect — see the 2026-08-24 02:15 log entry). `gemini-2.5-flash` (chat) / `gemini-2.5-pro` (analytics) replace `claude-opus-5`; `thinking_config.thinking_level` replaces `output_config.effort`; explicit caching is dropped for v1 rather than reimplemented against Gemini's separate stateful cache resource |
+| D14 | 2026-08-24 | Reinstate `anthropic` as an explicit fallback provider (`LLM_PROVIDER`), built proactively before P6 — **partially reverses D13/rules.md's second-provider ban** | Wait for Gemini to actually block P6/P7, build reactively | Gemini free-tier quota already hit twice in P3; P6's scenario suite and P7's iterative re-runs need far more volume. Required making `LLMClient` genuinely provider-neutral (`ToolSpec`/`ToolCallRequest`/`LLMResponse`, neutral `session.messages`) rather than honestly Gemini-specific as D13 left it. Caught a real regression in the same change: Gemini's `thought_signature` must round-trip on tool-call replay or the API rejects the turn — fixed via `ToolCallRequest.extra`, pinned with new tests |
 
 ---
 

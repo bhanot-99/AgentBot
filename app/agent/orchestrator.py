@@ -1,9 +1,7 @@
 import logging
 from datetime import UTC, datetime
 
-from google.genai import types
-
-from app.agent.tools import TOOLS, ToolDispatcher
+from app.agent.tools import TOOL_SPECS, ToolDispatcher
 from app.llm.base import LLMClient
 from app.models import LeadProfile, Session, Usage
 
@@ -33,48 +31,47 @@ class Orchestrator:
 
         The caller is responsible for appending the user's message to `session.messages`
         before calling this (step 4) and persisting the session afterward (step 7).
+
+        `session.messages` is the provider-neutral shape (app/llm/base.py) — this method never
+        touches a Gemini or Anthropic wire type directly; that translation lives entirely inside
+        whichever LLMClient is injected.
         """
         # No explicit caching in v1 (rules.md A15), so the composed prompt and the volatile
         # per-turn state are just one system_instruction string — there is no cache boundary
         # to keep them either side of.
         system = f"{self._system_prompt}\n\n---\n\n{_live_state_block(session.lead)}"
-        usage = _ZERO_USAGE
 
         for _ in range(MAX_ITERATIONS):
             response = await self._llm.complete(
-                system=system, messages=session.messages, tools=[TOOLS]
+                system=system, messages=session.messages, tools=TOOL_SPECS
             )
-            candidate = response.candidates[0]
             session.messages.append(
-                {"role": "model", "parts": [part.model_dump() for part in candidate.content.parts]}
-            )
-            usage_metadata = response.usage_metadata
-            usage = Usage(
-                input_tokens=usage_metadata.prompt_token_count or 0,
-                cache_read_input_tokens=usage_metadata.cached_content_token_count or 0,
-                output_tokens=usage_metadata.candidates_token_count or 0,
+                {
+                    "role": "assistant",
+                    "text": response.text,
+                    "tool_calls": [call.model_dump() for call in response.tool_calls],
+                }
             )
 
-            # A tool call is a function_call Part, not a distinct finish_reason (rules.md A6).
-            calls = [part.function_call for part in candidate.content.parts if part.function_call]
-            if not calls:
-                return (response.text or "").strip(), usage
+            if not response.tool_calls:
+                return response.text or "", response.usage
 
-            # All results for this turn go back as function_response Parts inside a single
-            # following user-role Content (rules.md A7) — never split across messages.
-            response_parts = []
-            for call in calls:
-                output = self._dispatcher.dispatch(call.name, dict(call.args or {}), session)
-                function_response = types.FunctionResponse(
-                    id=call.id, name=call.name, response=output
-                )
-                response_parts.append(types.Part(function_response=function_response).model_dump())
-            session.messages.append({"role": "user", "parts": response_parts})
+            # All results for this turn go back in a single following tool_result message
+            # (rules.md A7) — never split across messages, regardless of provider.
+            results = [
+                {
+                    "id": call.id,
+                    "name": call.name,
+                    "output": self._dispatcher.dispatch(call.name, call.args, session),
+                }
+                for call in response.tool_calls
+            ]
+            session.messages.append({"role": "tool_result", "results": results})
 
         # Iteration cap reached: the model is stuck. Force a graceful close and flag the
         # session for escalation rather than looping forever (Architecture.md §3.2.d).
         self._dispatcher.force_escalation(session, reason="iteration_cap_reached")
-        return _GRACEFUL_CLOSE_TEXT, usage
+        return _GRACEFUL_CLOSE_TEXT, _ZERO_USAGE
 
 
 def _live_state_block(lead: LeadProfile) -> str:

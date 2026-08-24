@@ -52,12 +52,14 @@ async def chat(
     if session.ended_at is not None:
         raise HTTPException(status_code=409, detail="session_ended")
 
-    session.messages.append({"role": "user", "parts": [{"text": body.message}]})
+    session.messages.append({"role": "user", "text": body.message})
 
     if session.contact_preference == ContactPreference.DO_NOT_CONTACT:
-        session.messages.append({"role": "model", "parts": [{"text": _DNC_ACKNOWLEDGEMENT}]})
+        session.messages.append(
+            {"role": "assistant", "text": _DNC_ACKNOWLEDGEMENT, "tool_calls": []}
+        )
         await store.save(session)
-        turn_id = sum(1 for message in session.messages if message["role"] == "model")
+        turn_id = sum(1 for message in session.messages if message["role"] == "assistant")
         return ChatResponse(
             session_id=session.id,
             turn_id=turn_id,
@@ -75,7 +77,7 @@ async def chat(
 
     await store.save(session)
 
-    turn_id = sum(1 for message in session.messages if message["role"] == "model")
+    turn_id = sum(1 for message in session.messages if message["role"] == "assistant")
 
     return ChatResponse(
         session_id=session.id,

@@ -43,21 +43,26 @@ needs an explicit justification in `Architecture.md`.
 | Web | **FastAPI** + Uvicorn | Mandated by the assignment |
 | Validation | Pydantic v2 | Requests, responses, domain models, analytics schema |
 | Config | pydantic-settings | The **only** place `os.environ` is read |
-| LLM | `google-genai` (official SDK) | Never raw `requests`/`httpx` against the API |
+| LLM | `google-genai` (Gemini, primary) **and** `anthropic` (Claude, fallback) | Never raw `requests`/`httpx` against either API |
 | Data | PyYAML | `data/project_facts.yaml` only |
 | Frontend | Vanilla HTML + CSS + JS | No framework, no bundler, no transpiler |
 | Fonts | Google Fonts | Plus Jakarta Sans · Noto Sans Devanagari · JetBrains Mono |
 | Tests | pytest, pytest-asyncio, httpx | `TestClient` for API contracts |
 | Lint | ruff | Lint + format. One tool |
 
-**Production dependency budget: 6.** `fastapi`, `uvicorn`, `google-genai`, `pydantic`,
-`pydantic-settings`, `pyyaml`. Adding a seventh requires deleting one or amending this table
+**Production dependency budget: 7.** `fastapi`, `uvicorn`, `google-genai`, `anthropic`, `pydantic`,
+`pydantic-settings`, `pyyaml`. Adding an eighth requires deleting one or amending this table
 with a written reason.
 
 **Provider history:** v1 used the `anthropic` SDK (Claude). Switched to `google-genai` (Gemini) —
-decision D13, `memory.md` 2026-08-24. The `LLMClient` Protocol (`app/llm/base.py`) is the seam this
-swap exercises; it previously leaked Anthropic-specific types into its signature, which was fixed
-as part of this switch (see D13's rationale) rather than repeated.
+decision D13, `memory.md` 2026-08-24. **Decision D14 (2026-08-24) reverses §3's blanket ban on a
+second provider SDK**: `anthropic` is reinstated as an explicit fallback for when the Gemini
+free-tier daily quota (hit repeatedly in P3) blocks the heavier live-testing volume of P6/P7 —
+user's explicit choice, not a silent reintroduction. `LLM_PROVIDER` (`app/config.py`) selects
+which one is active; `app/llm/base.py`'s `LLMClient` Protocol is now genuinely provider-neutral
+(messages/tools use project-owned shapes, not either SDK's wire types) rather than honestly
+Gemini-specific as D13 left it — the right time to add that abstraction is when a second provider
+is actually needed, not before.
 
 ---
 
@@ -73,7 +78,7 @@ as part of this switch (see D13's rationale) rather than repeated.
 | Redis, Celery, RabbitMQ | No background work exists |
 | Docker / docker-compose | Adds a prerequisite the reviewer may not have |
 | `requests`, `httpx` calls to the Gemini API | Use the SDK. Mixing transports is explicitly wrong |
-| OpenAI SDK, Anthropic SDK, LiteLLM, OpenAI-compatible shims | This is a `google-genai` build; a shim or a second provider SDK would obscure real SDK usage |
+| OpenAI SDK, LiteLLM, OpenAI-compatible shims | A generic shim would obscure real SDK usage for whichever of the two approved SDKs (`google-genai`, `anthropic`) is active — D14 reinstates `anthropic` itself as an explicit, approved fallback (see §2), not a shim |
 | `os.getenv` outside `config.py` | Untraceable configuration |
 | `print()` for diagnostics | Use the configured logger |
 | Global mutable singletons other than the injected store/client | Untestable |
@@ -129,10 +134,13 @@ parallel tool use. *(Phase 3 — verified live 2026-08-24.)*
 `function_response` payload — never a dropped result, never a raised exception that kills the
 turn. *(Phase 3 — verified live 2026-08-24.)*
 
-**A9 — Conversation history stores Gemini `Content` blocks verbatim**
-(`role: "user"` / `"model"`, `parts: [...]`). Append the response's own content, not an extracted
-string. Rewriting blocks into a bespoke format and back is the standard cause of tool-loop
-corruption.
+**A9 — Superseded by D14.** Conversation history no longer stores Gemini `Content` blocks
+directly — `session.messages` is a provider-neutral shape (`app/llm/base.py`) so the same history
+works under either provider. `GeminiLLMClient` translates to/from Gemini's `Content`/`Part` wire
+format only inside itself, never leaking it into the orchestrator or storage. The original
+warning still applies *inside that translation layer*: build the neutral assistant message from
+the response's own tool calls and text, not a hand-rolled re-derivation — rewriting is still the
+standard cause of tool-loop corruption, just moved one layer down.
 
 **A10 — `max_output_tokens` is set deliberately:** 1024 for chat (turns are word-capped), 4096 for
 analytics. Not left to chance, not set to 16000 "to be safe".
@@ -164,6 +172,56 @@ not an inline per-request flag like Anthropic's `cache_control`. Given the 24-ho
 full system prompt is sent every turn. `usage_metadata.cached_content_token_count` will read `0` as
 a result; **this is expected, not a bug**, unless and until explicit caching is added as a later
 enhancement. Documented as a deliberate simplification (D13), not silently dropped.
+
+---
+
+## 4a. Model Provider API Rules (Anthropic / `anthropic`, fallback — D14)
+
+Verified against the installed `anthropic==1.0.0` SDK's actual signatures (not assumed) by direct
+introspection in this session — `inspect.signature()` on `Messages.create`/`.parse`, the `types`
+module's model fields, and a constructed exception instance for the error-attribute names.
+
+**B1 — Selected via `LLM_PROVIDER=anthropic`** (`app/config.py`); model IDs come from
+`ANTHROPIC_CHAT_MODEL`/`ANTHROPIC_ANALYTICS_MODEL`, default `claude-haiku-4-5` for both — chosen
+for cost given this is a fallback path exercised heavily during P6/P7 scenario runs, not the
+primary path. Re-verify current model IDs before relying on this; Claude model names also move.
+
+**B2 — No `thinking` or `output_config.effort` param sent for Haiku-tier models.** Both are
+documented as erroring or unsupported on Claude Haiku 4.5 (the claude-api skill's own model
+table). If `ANTHROPIC_CHAT_MODEL` is ever pointed at a thinking-capable model (Opus/Sonnet 5+),
+this client does not currently set `thinking` either — a deliberate simplification for the
+fallback path, not a bug, since the primary path (Gemini) is where prompt-quality tuning matters.
+
+**B3 — Tools are declared as plain dicts** (`{"name", "description", "input_schema", "strict":
+true}`), **not** SDK type instances — `MessageParam`/`ToolParam`/etc. are TypedDicts, so a plain
+dict already satisfies the SDK. `input_schema` sets `additionalProperties: false` — the opposite
+of Gemini (A5), where the equivalent field is rejected by the live API. Both are correct for
+their own provider; neither generalizes to the other.
+
+**B4 — A tool call is a `ToolUseBlock` in `response.content`** (`block.type == "tool_use"`), with
+`block.id`/`block.name`/`block.input`. Text and tool-use blocks can coexist in one response —
+collect all text blocks, don't assume exactly one of either kind.
+
+**B5 — All tool results for one turn go back as `tool_result` content blocks inside a single
+following `user`-role message** — same rule as Gemini's A7, different wire shape. Each block sets
+`tool_use_id` (matching the originating `ToolUseBlock.id`) and `is_error` explicitly from the
+tool's own `ok` field — unlike Gemini, Anthropic has a real `is_error` flag rather than an
+embedded value in the response payload.
+
+**B6 — `messages.parse(output_format=PydanticModel)` still exists in `anthropic==1.0.0`**
+(confirmed via `inspect.signature`) alongside the newer `output_config.format` — use `parse()` for
+structured analytics extraction, reading `.parsed`, matching Gemini's A4 pattern.
+
+**B7 — Catch a specific chain, most-specific-first:** `AuthenticationError` → `PermissionDeniedError`
+→ `NotFoundError` → `RateLimitError` → `APIStatusError` (catches any other 4xx/5xx) →
+`APIConnectionError`. `exc.status_code` and `exc.request_id` are real attributes on every
+`APIStatusError` subclass (confirmed by constructing one directly against a synthetic `httpx2`
+response, not assumed from docs).
+
+**B8 — `anthropic.AsyncAnthropic` retries automatically** (`max_retries`, default 2, covers 429
+and 5xx) — the opposite of Gemini (A12), which retries nothing without explicit
+`http_options.retry_options`. Timeout is a plain float in seconds via `.with_options(timeout=...)`
+— not an `HttpOptions` object, and not milliseconds.
 
 ---
 

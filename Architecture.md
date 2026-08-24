@@ -54,10 +54,10 @@
 ├────────────────────────────────┼──────────────────────────────────────────┤
 │  INFRASTRUCTURE                                                           │
 │   SessionStore (Protocol) ──▶ InMemorySessionStore   [Redis-ready]        │
-│   LLMClient    (Protocol) ──▶ GeminiClient           [provider-swappable] │
+│   LLMClient    (Protocol) ──▶ GeminiClient / AnthropicClient (D14)        │
 └────────────────────────────────┼──────────────────────────────────────────┘
                                  ▼
-                        Gemini API — gemini-3.6-flash
+                Gemini API (primary) or Anthropic API (fallback) — LLM_PROVIDER
 ```
 
 **Why layered this way:** the Forward Deployed Engineer reality is that a customer will want to
@@ -297,8 +297,9 @@ AgentBot/
 │   │
 │   ├── llm/
 │   │   ├── __init__.py
-│   │   ├── base.py                 LLMClient Protocol
-│   │   └── gemini_client.py        google-genai SDK impl: retries, timeouts, usage
+│   │   ├── base.py                 LLMClient Protocol + provider-neutral ToolSpec/LLMResponse (D14)
+│   │   ├── gemini_client.py        google-genai SDK impl: retries, timeouts, usage
+│   │   └── anthropic_client.py     anthropic SDK impl — fallback provider (D14)
 │   │
 │   ├── services/
 │   │   ├── __init__.py
@@ -355,7 +356,7 @@ AgentBot/
 | Server | Uvicorn | FastAPI's reference server; one command to run everything |
 | Validation | Pydantic v2 | Request/response contracts **and** the analytics output schema |
 | Config | pydantic-settings | Typed env loading; single place env vars are read |
-| LLM SDK | `google-genai` (official) | First-party SDK: typed errors, `response_schema` structured output, function calling |
+| LLM SDK | `google-genai` (primary) + `anthropic` (fallback, D14) | Typed errors, structured output, function calling on both; `LLM_PROVIDER` selects the active one |
 | Facts file | PyYAML | Human-editable knowledge base a non-engineer can review |
 
 ### Model configuration
@@ -480,7 +481,7 @@ in every log line.** Prompts and full transcripts are never logged at INFO.
 ```
 Session
   id · channel · created_at · ended_at · language_hint
-  messages: list[dict]                  # exact Gemini Content wire format, replayed verbatim
+  messages: list[dict]                  # provider-neutral shape (app/llm/base.py) — see D14
   lead: LeadProfile
   tool_events: list[ToolEvent]
   stage: Stage
@@ -502,10 +503,16 @@ ConversationAnalytics
   … PRD §7, as a Pydantic model passed as `response_schema`, read from `response.parsed`
 ```
 
-`Session.messages` stores Gemini `Content` blocks verbatim (`role: "user"|"model"`, `parts: [...]`),
-including `function_call` and `function_response` parts once Phase 3 adds tools. Rewriting them
-into a bespoke internal format and back is the classic source of tool-loop corruption; we do not
-do it.
+`Session.messages` stores a provider-neutral shape (D14, superseding the original Gemini-only
+design): `{"role":"user","text"}` · `{"role":"assistant","text","tool_calls":[{"id","name","args",
+"extra"}]}` · `{"role":"tool_result","results":[{"id","name","output"}]}`. Each `LLMClient`
+implementation translates to/from its own wire format entirely inside itself — the orchestrator
+and storage never see a Gemini `Content`/`Part` or an Anthropic `MessageParam` directly. `extra` is
+an opaque per-provider passthrough bag (e.g. Gemini's `thought_signature`, required verbatim on
+the next request or the live API rejects the turn — caught live during the D14 build, not
+documented up front). Rewriting a provider's own tool-call representation into a bespoke format
+and back within its client is still the classic source of tool-loop corruption; that discipline
+just moved one layer down from where it lived pre-D14.
 
 ---
 
@@ -585,3 +592,4 @@ restart — correct for a demo, and the `SessionStore` Protocol is the documente
 | D9 | `effort: low` for chat, not a smaller model | Downgrade to a faster tier | Keeps the strongest instruction-following for the anti-hallucination requirement; effort is the correct latency lever |
 | D10 | Failure injection via env + tool input | Random failures | A demo video needs failure **on cue**; randomness is unrecordable |
 | D13 | `google-genai` (Gemini) instead of `anthropic` (Claude) | Stay on Anthropic | User's explicit choice after the Anthropic test account hit a billing block mid-Phase-2; `LLMClient` was the designed-for swap seam. Fixed a real bug in the same change: the Protocol previously leaked Anthropic-specific types into its signature instead of being genuinely provider-neutral |
+| D14 | Reinstate `anthropic` as an explicit fallback (`LLM_PROVIDER=anthropic`), built before Phase 6 | Wait until Gemini quota actually blocks P6/P7, then build reactively | The Gemini free-tier daily quota was already hit twice in P3; P6's ~19-scenario suite and P7's iterative re-runs need far more volume. Built proactively so a mid-phase quota wall is a config change, not a stop-and-code interruption. Required making `LLMClient` genuinely provider-neutral (project-owned `ToolSpec`/`ToolCallRequest`/`LLMResponse` types, `session.messages` no longer Gemini `Content` blocks) rather than leaving it honestly Gemini-specific as D13 did — the right time for that abstraction is when a second provider is actually needed |
